@@ -24,10 +24,10 @@ namespace CPT.Core.Research;
 // returns whatever quotes it could gather.
 public sealed class PersonaResearchAgent : IDisposable
 {
-    private readonly LlamaCppClient _llm;
+    private readonly IPersonaRewriter _llm;
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(20) };
 
-    public PersonaResearchAgent(LlamaCppClient llm)
+    public PersonaResearchAgent(IPersonaRewriter llm)
     {
         _llm = llm;
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("CustomPersonaTranslator/0.1 (+https://localhost)");

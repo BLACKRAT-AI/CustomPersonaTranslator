@@ -46,8 +46,13 @@ public sealed class AppServices : IDisposable
     public GpuTier Gpu { get; }
 
     public IpcServer Ipc { get; }
-    public LlamaCppServer LlmServer { get; }
-    public LlamaCppClient Llm { get; }
+    /// <summary>
+    /// The CLI that restates answers in the persona's voice.
+    ///
+    /// Its own orchestrator, so it can run a cheap model while the agent runs
+    /// a strong one -- and so the two never fight over one set of options.
+    /// </summary>
+    public CliOrchestrator RewriteCli { get; }
     public ITtsEngine Tts { get; }
     public ITtsEngine? CloneTts { get; private set; }
     public TranslationPipeline Pipeline { get; private set; }
@@ -91,17 +96,10 @@ public sealed class AppServices : IDisposable
 
         Ipc = new IpcServer(Settings.IpcPort);
 
-        LlmServer = new LlamaCppServer(
-            ResolveOrDefault(Settings.LlamaCppExe,
-                Path.Combine(AppContext.BaseDirectory, "tools", "llama", "llama-server.exe")),
-            ResolveOrDefault(Settings.LlamaCppModel,
-                Path.Combine(AppContext.BaseDirectory, "tools", "llama", "models", "default.gguf")),
-            port: Settings.LlamaCppPort,
-            ctxSize: Settings.LlamaCppCtxSize,
-            nGpuLayers: Settings.LlamaCppGpuLayers);
-        _ = Task.Run(StartLlmServerAsync);
-
-        Llm = new LlamaCppClient(baseUrl: LlmServer.BaseUrl);
+        // No local model server. Rewriting is a CLI turn now: nothing resident,
+        // nothing to warm up, and nothing to leak.
+        RewriteCli = new CliOrchestrator(
+            RewriteProviderId(), Settings.ResolveCliWorkingDirectory());
         Tts = new PiperTts(
             piperPath: Settings.PiperPath,
             modelDir: string.IsNullOrEmpty(Settings.PiperModelsDir)
@@ -112,7 +110,7 @@ public sealed class AppServices : IDisposable
         CptLog.Write("=== CPT.Shell starting ===");
         CloneTts = CreateCloneEngineIfConfigured();
 
-        Pipeline = new TranslationPipeline(Llm, Tts, CloneTts);
+        Pipeline = new TranslationPipeline(new CliPersonaRewriter(RewriteCli), Tts, CloneTts);
         WirePipeline(Pipeline);
 
         Ipc.MessageReceived += OnAdapterMessage;
@@ -127,8 +125,35 @@ public sealed class AppServices : IDisposable
         Cli = new CliOrchestrator(Settings.Cli.ProviderId, Settings.ResolveCliWorkingDirectory());
         Cli.StatusChanged += status => OnCliStatusChanged?.Invoke(status);
         ApplyCliOptions();
+        ApplyRewriteOptions();
 
         WarmCloneIfActivePersonaNeedsIt();
+    }
+
+
+    /// <summary>The rewriter, for anything that needs the persona's manner.</summary>
+    public IPersonaRewriter Rewriter => new CliPersonaRewriter(RewriteCli);
+
+    /// <summary>
+    /// Which CLI rewrites. Empty means "the same one the agent uses", which is
+    /// the right default: it is installed and signed in by definition.
+    /// </summary>
+    private string RewriteProviderId() =>
+        string.IsNullOrWhiteSpace(Settings.Rewrite.ProviderId)
+            ? Settings.Cli.ProviderId
+            : Settings.Rewrite.ProviderId;
+
+    /// <summary>Pushes the stored rewrite options into its orchestrator.</summary>
+    private void ApplyRewriteOptions()
+    {
+        RewriteCli.Options = Settings.Rewrite.OptionsFor(RewriteProviderId());
+    }
+
+    /// <summary>Re-reads the rewrite settings after they have been edited.</summary>
+    public void ReloadRewriteCli()
+    {
+        RewriteCli.Select(RewriteProviderId(), Settings.ResolveCliWorkingDirectory());
+        ApplyRewriteOptions();
     }
 
     // --- startup ----------------------------------------------------------
@@ -159,19 +184,6 @@ public sealed class AppServices : IDisposable
         }
 
         if (Settings.Standby.Enabled) SetStandbyEnabled(true);
-    }
-
-    private async Task StartLlmServerAsync()
-    {
-        try
-        {
-            await LlmServer.StartAsync().ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or IOException)
-        {
-            CptLog.Write("[llm] local server did not start: " + ex.Message);
-            OnNotification?.Invoke("Local rewrite model unavailable: " + ex.Message);
-        }
     }
 
     /// <summary>
@@ -556,7 +568,7 @@ public sealed class AppServices : IDisposable
 
         CloneTts = new ChatterboxTts(Settings.ChatterboxPython, Settings.ChatterboxScript);
 
-        var replacement = new TranslationPipeline(Llm, Tts, CloneTts);
+        var replacement = new TranslationPipeline(new CliPersonaRewriter(RewriteCli), Tts, CloneTts);
         WirePipeline(replacement);
         Pipeline.Dispose();
         Pipeline = replacement;
@@ -743,7 +755,6 @@ public sealed class AppServices : IDisposable
         Ipc.Dispose();
         Cli.Dispose();
         Pipeline.Dispose();
-        Llm.Dispose();
-        LlmServer.Dispose();
+        RewriteCli.Dispose();
     }
 }

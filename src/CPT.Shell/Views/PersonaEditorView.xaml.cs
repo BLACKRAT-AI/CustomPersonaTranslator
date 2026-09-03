@@ -330,7 +330,7 @@ public sealed partial class PersonaEditorView : SettingsPage
         ResearchStatus.Text = "Searching…";
         try
         {
-            var agent = new PersonaResearchAgent(_services.Llm);
+            var agent = new PersonaResearchAgent(_services.Rewriter);
             var quotes = await agent.ResearchAsync(name, CancellationToken.None);
             _researchQuotes = quotes;
             ResearchStatus.Text = $"Found {quotes.Count} quotes for {name}.";
@@ -461,7 +461,7 @@ public sealed partial class PersonaEditorView : SettingsPage
                 WhisperModelPath = _services.Settings.WhisperModelPath,
             };
 
-            var builder = new PersonaBuilder(_services.Llm);
+            var builder = new PersonaBuilder(_services.Rewriter);
             var persona = await builder.BuildAsync(
                 req, new Progress<string>(message => Dispatcher.Invoke(() => Step(message))));
 

@@ -6,6 +6,31 @@ using CPT.Core.Diagnostics;
 
 namespace CPT.Core.Settings;
 
+
+/// <summary>
+/// Which CLI restates answers in the persona's voice, and how.
+///
+/// Separate from the agent's CLI on purpose: the agent should be the strongest
+/// model available, and restating three sentences should be the cheapest.
+/// </summary>
+public sealed class RewriteSettings
+{
+    /// <summary>Provider id, or empty to use whatever the active agent uses.</summary>
+    public string ProviderId { get; set; } = "";
+
+    /// <summary>Per-provider option choices, exactly as CliSettings stores them.</summary>
+    public Dictionary<string, Dictionary<string, string>> ProviderOptions { get; set; } = [];
+
+    /// <summary>The stored choices for one provider. Never null.</summary>
+    public Dictionary<string, string> OptionsFor(string providerId)
+    {
+        if (ProviderOptions.TryGetValue(providerId, out var stored)) return stored;
+
+        var created = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        ProviderOptions[providerId] = created;
+        return created;
+    }
+}
 /// <summary>
 /// Which coding CLI CPT talks to, and how.
 /// </summary>
@@ -137,6 +162,9 @@ public sealed class AppSettings
     /// phrase, so several can be addressed by voice without opening settings.
     /// </summary>
     public Agents.AgentBook Agents { get; set; } = new();
+
+    /// <summary>Which CLI restates answers in the persona's voice, and how.</summary>
+    public RewriteSettings Rewrite { get; set; } = new();
 
     /// <summary>Location of the settings file.</summary>
     public static string FilePath { get; } = Path.Combine(

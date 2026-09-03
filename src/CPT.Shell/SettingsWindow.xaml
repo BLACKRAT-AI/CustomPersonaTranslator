@@ -280,6 +280,51 @@
                                       Content="Remember the conversation between requests"/>
                             <CheckBox x:Name="CliAutoSetup"
                                       Content="Set up the selected CLI automatically on startup"/>
+                            <!-- ===== The persona voice's own CLI ===== -->
+                            <TextBlock Text="PERSONA VOICE" Style="{StaticResource Caption}" Margin="0,26,0,0"/>
+                            <TextBlock Style="{StaticResource Hint}" TextWrapping="Wrap">
+                                Which CLI restates the agent's answer in the persona's voice. Use the cheapest,
+                                fastest model here — it is only rephrasing a few sentences, and it runs on every
+                                reply.
+                            </TextBlock>
+
+                            <ComboBox x:Name="RewriteProvider"
+                                      Margin="0,8,0,0"
+                                      SelectionChanged="OnRewriteProviderChanged"
+                                      ToolTip="The CLI that rephrases replies">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding DisplayName}"/>
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+
+                            <ItemsControl x:Name="RewriteOptions" Margin="0,6,0,0">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Margin="0,10,0,0">
+                                            <TextBlock Text="{Binding Label}" Style="{StaticResource Caption}"/>
+                                            <TextBlock Text="{Binding Hint}"
+                                                       Style="{StaticResource Hint}"
+                                                       Visibility="{Binding HintVisibility}"/>
+                                            <ComboBox ItemsSource="{Binding Choices}"
+                                                      SelectedItem="{Binding Selected, Mode=TwoWay}">
+                                                <ComboBox.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding Label}"/>
+                                                    </DataTemplate>
+                                                </ComboBox.ItemTemplate>
+                                            </ComboBox>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <TextBlock x:Name="NoRewriteOptionsNote"
+                                       Style="{StaticResource Hint}"
+                                       Margin="0,12,0,0"
+                                       Visibility="Collapsed"
+                                       Text="This CLI exposes no per-turn options."/>
 
                             <TextBlock Text="WORKING FOLDER" Style="{StaticResource Caption}"/>
                             <TextBlock Style="{StaticResource Hint}" Text="Blank uses your user folder."/>
@@ -386,15 +431,6 @@
                     <ScrollViewer Padding="14,14,14,10" VerticalScrollBarVisibility="Auto">
                         <StackPanel>
                             <TextBlock x:Name="GpuText" Style="{StaticResource Hint}"/>
-
-                            <TextBlock Text="LLAMA-SERVER BINARY" Style="{StaticResource Caption}"/>
-                            <TextBox x:Name="LlamaExe"/>
-
-                            <TextBlock Text="LLAMA MODEL (.gguf)" Style="{StaticResource Caption}"/>
-                            <TextBox x:Name="LlamaModel"/>
-
-                            <TextBlock Text="GPU LAYERS  (0 = CPU, 99 = full GPU)" Style="{StaticResource Caption}"/>
-                            <TextBox x:Name="LlamaGpuLayers"/>
 
                             <TextBlock Text="IPC PORT FOR BROWSER AND EDITOR EXTENSIONS" Style="{StaticResource Caption}"/>
                             <TextBox x:Name="IpcPort"/>

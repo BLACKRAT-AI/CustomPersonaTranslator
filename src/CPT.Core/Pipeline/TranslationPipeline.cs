@@ -17,7 +17,7 @@ namespace CPT.Core.Pipeline;
 // audio levels, and hide-when-done.
 public sealed class TranslationPipeline : IDisposable
 {
-    private readonly LlamaCppClient _llm;
+    private readonly IPersonaRewriter _llm;
     private readonly ITtsEngine _piperTts;
     private readonly ITtsEngine? _cloneTts;
     private ITtsEngine _tts;
@@ -29,7 +29,7 @@ public sealed class TranslationPipeline : IDisposable
     public event Action? OnDone;
     public event Action<string>? OnEngineFallback;          // raised when clone fails and we switch to Piper
 
-    public TranslationPipeline(LlamaCppClient llm, ITtsEngine piperTts, ITtsEngine? cloneTts = null)
+    public TranslationPipeline(IPersonaRewriter llm, ITtsEngine piperTts, ITtsEngine? cloneTts = null)
     {
         _llm = llm;
         _piperTts = piperTts;

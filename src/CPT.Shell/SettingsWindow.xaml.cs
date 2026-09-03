@@ -52,6 +52,7 @@ public partial class SettingsWindow : Window
     private readonly ObservableCollection<CliOptionRow> _optionRows = [];
     private readonly ObservableCollection<PersonaRow> _personaRows = [];
     private readonly Stack<SettingsPage> _pages = new();
+    private bool _suppressRewriteProvider;
 
     public SettingsWindow(AppServices services, int initialTab = AgentsTab)
     {
@@ -61,6 +62,7 @@ public partial class SettingsWindow : Window
         CliOptions.ItemsSource = _optionRows;
         PersonaList.ItemsSource = _personaRows;
         AgentList.ItemsSource = _agentRows;
+        RewriteOptions.ItemsSource = _rewriteRows;
         Load();
 
         Tabs.SelectedIndex = Math.Clamp(initialTab, 0, Tabs.Items.Count - 1);
@@ -105,6 +107,7 @@ public partial class SettingsWindow : Window
 
         // Coming back from a pane, anything it may have changed is now stale.
         LoadCliTab();
+        LoadRewriteTab();
         LoadPersonaList();
         LoadAgents();
     }
@@ -266,6 +269,61 @@ public partial class SettingsWindow : Window
         }
     }
 
+
+    // --- the persona voice's CLI ------------------------------------------
+
+    private readonly ObservableCollection<CliOptionRow> _rewriteRows = [];
+
+    /// <summary>
+    /// Loads which CLI rewrites replies, and its per-turn options.
+    ///
+    /// The same option machinery as the agent's, deliberately: model, effort
+    /// and thinking mean the same things here, and the whole point of choosing
+    /// separately is to run a cheap model on the job that happens every reply.
+    /// </summary>
+    private void LoadRewriteTab()
+    {
+        var providers = CliOrchestrator.AvailableProviders;
+        RewriteProvider.ItemsSource = providers;
+
+        var stored = _services.Settings.Rewrite.ProviderId;
+        var provider = providers.FirstOrDefault(p =>
+            string.Equals(p.Id, stored, StringComparison.OrdinalIgnoreCase));
+
+        _suppressRewriteProvider = true;
+        RewriteProvider.SelectedItem = provider ?? _services.RewriteCli.Provider;
+        _suppressRewriteProvider = false;
+
+        LoadRewriteOptions();
+    }
+
+    private void LoadRewriteOptions()
+    {
+        if (RewriteProvider.SelectedItem is not CliProvider provider) return;
+
+        var stored = _services.Settings.Rewrite.OptionsFor(provider.Id);
+        _rewriteRows.Clear();
+
+        foreach (var option in provider.Options)
+        {
+            stored.TryGetValue(option.Id, out var choiceId);
+            _rewriteRows.Add(new CliOptionRow(option, choiceId));
+        }
+
+        NoRewriteOptionsNote.Visibility = _rewriteRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnRewriteProviderChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressRewriteProvider) return;
+        if (RewriteProvider.SelectedItem is not CliProvider provider) return;
+
+        _services.Settings.Rewrite.ProviderId = provider.Id;
+        _services.Settings.Save();
+        _services.ReloadRewriteCli();
+        LoadRewriteOptions();
+    }
+
     private void Load()
     {
         var settings = _services.Settings;
@@ -293,9 +351,6 @@ public partial class SettingsWindow : Window
             : "yt-dlp was not found — run scripts/bootstrap.ps1.";
 
         GpuText.Text = "Detected GPU tier: " + _services.Gpu;
-        LlamaExe.Text = settings.LlamaCppExe;
-        LlamaModel.Text = settings.LlamaCppModel;
-        LlamaGpuLayers.Text = Format(settings.LlamaCppGpuLayers);
         IpcPort.Text = Format(settings.IpcPort);
         LogPath.Text = "Log file: " + CptLog.FilePath;
     }
@@ -353,6 +408,14 @@ public partial class SettingsWindow : Window
         var stored = settings.Cli.OptionsFor(_services.Cli.Provider.Id);
         foreach (var row in _optionRows) stored[row.Option.Id] = row.SelectedId;
 
+        // The persona voice's own CLI and its per-turn choices.
+        if (RewriteProvider.SelectedItem is CliProvider rewriteProvider)
+        {
+            settings.Rewrite.ProviderId = rewriteProvider.Id;
+            var rewriteStored = settings.Rewrite.OptionsFor(rewriteProvider.Id);
+            foreach (var row in _rewriteRows) rewriteStored[row.Option.Id] = row.SelectedId;
+        }
+
         settings.Cli.KeepConversationContext = CliKeepContext.IsChecked == true;
         settings.Cli.AutoSetup = CliAutoSetup.IsChecked == true;
         settings.Cli.WorkingDirectory = CliWorkingDirectory.Text.Trim();
@@ -375,13 +438,11 @@ public partial class SettingsWindow : Window
         settings.WhisperModelPath = WhisperModelPath.Text.Trim();
         settings.PiperPath = PiperPath.Text.Trim();
         settings.PiperModelsDir = PiperModelsDir.Text.Trim();
-        settings.LlamaCppExe = LlamaExe.Text.Trim();
-        settings.LlamaCppModel = LlamaModel.Text.Trim();
-        AssignInt(LlamaGpuLayers.Text, settings.LlamaCppGpuLayers, 0, 999, v => settings.LlamaCppGpuLayers = v);
         AssignInt(IpcPort.Text, settings.IpcPort, 1024, 65535, v => settings.IpcPort = v);
 
         settings.Save();
         _services.ApplyCliOptions();
+        _services.ReloadRewriteCli();
 
         if (standbyChanged) await _services.ReloadStandbyAsync().ConfigureAwait(true);
         if (startStandby != _services.IsStandbyRunning) _services.SetStandbyEnabled(startStandby);

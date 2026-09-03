@@ -14,7 +14,7 @@ namespace CPT.Core.Llm;
 // Streaming client for llama.cpp's OpenAI-compatible /v1/chat/completions
 // endpoint. Drop-in replacement for OllamaClient — same persona prompt
 // construction and async-enumerable token stream.
-public sealed class LlamaCppClient : IDisposable
+public sealed class LlamaCppClient : IDisposable, IPersonaRewriter
 {
     private readonly HttpClient _http;
     private readonly string _baseUrl;

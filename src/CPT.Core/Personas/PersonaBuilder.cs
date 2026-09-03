@@ -19,8 +19,8 @@ namespace CPT.Core.Personas;
 // Uses the local LLM to produce a structured style profile + system prompt.
 public sealed class PersonaBuilder
 {
-    private readonly LlamaCppClient _llm;
-    public PersonaBuilder(LlamaCppClient llm) { _llm = llm; }
+    private readonly IPersonaRewriter _llm;
+    public PersonaBuilder(IPersonaRewriter llm) { _llm = llm; }
 
     /// <summary>
     /// Transcribes the persona's voice sample into short quotable phrases.
