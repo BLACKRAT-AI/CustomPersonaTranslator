@@ -1,3 +1,4 @@
+using System.Windows;
 using System.Collections.Generic;
 using CPT.Core.Agents;
 using CPT.Core.Cli;
@@ -38,7 +39,7 @@ public sealed class AgentRow : ObservableObject
     public string TriggerPhrase
     {
         get => _agent.TriggerPhrase;
-        set { _agent.TriggerPhrase = value; Raise(); }
+        set { _agent.TriggerPhrase = value; Raise(); RefreshSetup(); }
     }
 
     public CliProvider? Provider
@@ -48,6 +49,7 @@ public sealed class AgentRow : ObservableObject
         {
             if (value is null) return;
             _agent.ProviderId = value.Id;
+            RefreshSetup();
             Raise();
         }
     }
@@ -64,7 +66,46 @@ public sealed class AgentRow : ObservableObject
         {
             if (value is null) return;
             _agent.PersonaId = value.Id;
+            RefreshSetup();
             Raise();
         }
+    }
+
+    /// <summary>
+    /// What this agent still needs before it can answer, in plain words.
+    ///
+    /// An agent is a pair, and a half-made pair fails at the moment it is
+    /// spoken to rather than at the moment it is made. The row says which half
+    /// is missing while the user is still looking at it.
+    /// </summary>
+    public string SetupHint
+    {
+        get
+        {
+            if (Persona is null)
+                return Personas.Count == 0
+                    ? "No personas yet — this agent needs a voice."
+                    : "Pick a persona for this agent's voice.";
+
+            if (!CliReady) return $"{Provider?.DisplayName ?? "The CLI"} is not linked yet.";
+
+            return string.IsNullOrWhiteSpace(TriggerPhrase)
+                ? "Ready. Add a phrase to summon it by voice."
+                : $"Ready. Say “{TriggerPhrase}” to ask it something.";
+        }
+    }
+
+    /// <summary>Whether the Fix button has anything to offer.</summary>
+    public Visibility SetupVisibility =>
+        Persona is null || !CliReady ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>True when this agent's CLI is installed and signed in.</summary>
+    public bool CliReady { get; set; }
+
+    /// <summary>Re-reads everything the row shows about setup state.</summary>
+    public void RefreshSetup()
+    {
+        Raise(nameof(SetupHint));
+        Raise(nameof(SetupVisibility));
     }
 }

@@ -199,11 +199,15 @@ public partial class PersonaWindow : Window
     {
         if (_services is null) return;
         var persona = _services.ActivePersona;
-        // The AGENT is what the user is talking TO. A persona is how it sounds
-        // and a CLI is what runs it; neither is the thing being addressed, so
-        // the bar names the agent and falls back to the persona only when no
-        // agents have been set up yet.
-        HeaderName.Text = (_services.ActiveAgent?.Name ?? persona.Name ?? "").ToUpperInvariant();
+        // The AGENT is what the user is talking TO: it owns a persona (how it
+        // sounds) and a CLI (what runs it). With none set up there is nothing
+        // to name, and naming the persona instead just hid the fact that the
+        // first thing to do is make an agent.
+        var agent = _services.ActiveAgent;
+        HeaderName.Text = agent is not null
+            ? agent.Name.ToUpperInvariant()
+            : "NO AGENT — OPEN SETTINGS";
+        MicHint.Text = agent is not null ? "hold to talk" : "set up an agent first";
 
         ApplyRingPalette(persona.Visual.HologramColor);
         SizeToHologram();

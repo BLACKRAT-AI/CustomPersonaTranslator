@@ -30,11 +30,19 @@ namespace CPT.Shell;
 /// </summary>
 public partial class SettingsWindow : Window
 {
-    /// <summary>Index of the Agent tab, for callers that want to open on it.</summary>
-    public const int AgentTab = 0;
+    /// <summary>
+    /// Tab indices, in the order the user works through them: make an agent,
+    /// give it a voice, link the CLI it runs on. The order used to be the order
+    /// the tabs happened to be written in.
+    /// </summary>
+    public const int AgentsTab = 0;
 
     /// <summary>Index of the Personas tab.</summary>
-    public const int PersonasTab = 2;
+    public const int PersonasTab = 1;
+
+    /// <summary>Index of the CLI tab.</summary>
+    public const int CliTab = 2;
+
 
     private static readonly SolidColorBrush DotReady = Frozen(0x5C, 0xD6, 0x8A);
     private static readonly SolidColorBrush DotAttention = Frozen(0xE8, 0xB3, 0x39);
@@ -45,7 +53,7 @@ public partial class SettingsWindow : Window
     private readonly ObservableCollection<PersonaRow> _personaRows = [];
     private readonly Stack<SettingsPage> _pages = new();
 
-    public SettingsWindow(AppServices services, int initialTab = AgentTab)
+    public SettingsWindow(AppServices services, int initialTab = AgentsTab)
     {
         InitializeComponent();
         _services = services ?? throw new ArgumentNullException(nameof(services));
@@ -96,7 +104,7 @@ public partial class SettingsWindow : Window
         TabPane.Visibility = Visibility.Visible;
 
         // Coming back from a pane, anything it may have changed is now stale.
-        LoadAgentTab();
+        LoadCliTab();
         LoadPersonaList();
         LoadAgents();
     }
@@ -122,9 +130,20 @@ public partial class SettingsWindow : Window
         var providers = CliOrchestrator.AvailableProviders;
         var personas = _services.Personas.LoadAll().ToList();
 
+        var linked = _services.Cli.Status;
+
         _agentRows.Clear();
         foreach (var agent in _services.Settings.Agents.Agents)
-            _agentRows.Add(new AgentRow(agent, providers, personas));
+        {
+            var row = new AgentRow(agent, providers, personas)
+            {
+                // Only the SELECTED provider has been probed; the others are
+                // reported as unknown rather than as broken.
+                CliReady = linked.IsReady && linked.Provider.Id == agent.ProviderId,
+            };
+            row.RefreshSetup();
+            _agentRows.Add(row);
+        }
 
         ShowAgentStatus();
     }
@@ -163,6 +182,31 @@ public partial class SettingsWindow : Window
 
         SaveAgents();
         LoadAgents();
+    }
+
+
+    /// <summary>
+    /// Takes the user to whatever this agent is still missing.
+    ///
+    /// A half-made agent otherwise fails at the moment it is spoken to, which
+    /// is the worst possible time to discover it has no voice.
+    /// </summary>
+    private void OnFixAgent(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not AgentRow row) return;
+
+        if (row.Persona is null)
+        {
+            if (row.Personas.Count == 0) { ShowPage(new PersonaEditorView(_services)); return; }
+            Tabs.SelectedIndex = PersonasTab;
+            return;
+        }
+
+        if (!row.CliReady)
+        {
+            _services.Cli.Select(row.Agent.ProviderId, null);
+            ShowPage(new CliSetupView(_services));
+        }
     }
 
     private void OnUseAgent(object sender, RoutedEventArgs e)
@@ -207,7 +251,7 @@ public partial class SettingsWindow : Window
                 new Progress<string>(line => Dispatcher.Invoke(() => CliState.Text = line)));
 
             CliState.Text = failure ?? "Updated.";
-            LoadAgentTab();
+            LoadCliTab();
         }
         catch (Exception ex)
         {
@@ -226,7 +270,7 @@ public partial class SettingsWindow : Window
     {
         var settings = _services.Settings;
 
-        LoadAgentTab();
+        LoadCliTab();
         LoadPersonaList();
 
         StandbyEnabled.IsChecked = settings.Standby.Enabled;
@@ -256,7 +300,7 @@ public partial class SettingsWindow : Window
         LogPath.Text = "Log file: " + CptLog.FilePath;
     }
 
-    private void LoadAgentTab()
+    private void LoadCliTab()
     {
         var settings = _services.Settings;
         var status = _services.Cli.Status;

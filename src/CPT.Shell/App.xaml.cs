@@ -207,7 +207,7 @@ public partial class App : Application, IDisposable
     }
 
     /// <summary>Opens the settings window, reusing it if it is already open.</summary>
-    public void ShowSettings(int tab = SettingsWindow.AgentTab)
+    public void ShowSettings(int tab = SettingsWindow.AgentsTab)
     {
         if (_settings is { IsLoaded: true })
         {
@@ -236,7 +236,7 @@ public partial class App : Application, IDisposable
     /// <summary>Opens settings on the CLI setup pane.</summary>
     public void ShowCliSetup()
     {
-        ShowSettings(SettingsWindow.AgentTab);
+        ShowSettings(SettingsWindow.CliTab);
         _settings?.ShowPage(new Views.CliSetupView(Services));
     }
 
