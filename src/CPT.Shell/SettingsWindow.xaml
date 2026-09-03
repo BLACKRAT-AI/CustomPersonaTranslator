@@ -1,0 +1,308 @@
+<Window x:Class="CPT.Shell.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:CPT.Shell.ViewModels"
+        Title="Custom Persona Translator"
+        Width="900" Height="780"
+        MinWidth="720" MinHeight="600"
+        Background="{StaticResource Bg}"
+        Foreground="{StaticResource Text}"
+        FontFamily="Segoe UI"
+        WindowStartupLocation="CenterScreen">
+
+    <!--
+        Everything the app can do lives in this one window. Panes such as the CLI
+        setup, the persona editor and the video clip picker are pushed over the
+        tabs rather than opened as separate windows.
+    -->
+    <Grid>
+        <DockPanel x:Name="TabPane">
+            <Border DockPanel.Dock="Bottom"
+                    Background="#FF1C1C1C"
+                    BorderBrush="{StaticResource BorderBr}"
+                    BorderThickness="0,1,0,0"
+                    Padding="16,10">
+                <DockPanel LastChildFill="False">
+                    <TextBlock x:Name="SaveHint"
+                               DockPanel.Dock="Left"
+                               VerticalAlignment="Center"
+                               Foreground="{StaticResource Muted}"
+                               FontSize="11"/>
+                    <Button DockPanel.Dock="Right"
+                            Style="{StaticResource PrimaryButton}"
+                            Content="Save"
+                            Click="OnSave"
+                            Margin="8,0,0,0"/>
+                    <Button DockPanel.Dock="Right" Content="Close" Click="OnCancel"/>
+                </DockPanel>
+            </Border>
+
+            <TabControl x:Name="Tabs" Background="Transparent" BorderThickness="0" Margin="12,10,12,0">
+
+                <!-- ========================== AGENT ========================== -->
+                <TabItem Header="Agent">
+                    <ScrollViewer Padding="14,14,14,10" VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <Border Padding="14,12"
+                                    CornerRadius="8"
+                                    Background="#FF1E1E1E"
+                                    BorderBrush="{StaticResource BorderBr}"
+                                    BorderThickness="1">
+                                <DockPanel LastChildFill="True">
+                                    <Button DockPanel.Dock="Right"
+                                            Content="Change…"
+                                            Margin="12,0,0,0"
+                                            VerticalAlignment="Center"
+                                            Click="OnOpenCliSetup"/>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock x:Name="CliName"
+                                                   FontSize="14" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource Text}"/>
+                                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                            <Ellipse x:Name="CliDot"
+                                                     Width="7" Height="7"
+                                                     Margin="0,0,7,0"
+                                                     VerticalAlignment="Center"/>
+                                            <TextBlock x:Name="CliState"
+                                                       FontSize="11"
+                                                       Foreground="{StaticResource Muted}"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </DockPanel>
+                            </Border>
+
+                            <ItemsControl x:Name="CliOptions" Margin="0,6,0,0">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Margin="0,10,0,0">
+                                            <TextBlock Text="{Binding Label}" Style="{StaticResource Caption}"/>
+                                            <TextBlock Text="{Binding Hint}"
+                                                       Style="{StaticResource Hint}"
+                                                       Visibility="{Binding HintVisibility}"/>
+                                            <ComboBox ItemsSource="{Binding Choices}"
+                                                      SelectedItem="{Binding Selected, Mode=TwoWay}">
+                                                <ComboBox.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding Label}"/>
+                                                    </DataTemplate>
+                                                </ComboBox.ItemTemplate>
+                                            </ComboBox>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <TextBlock x:Name="NoOptionsNote"
+                                       Style="{StaticResource Hint}"
+                                       Margin="0,12,0,0"
+                                       Visibility="Collapsed"
+                                       Text="This CLI exposes no per-turn options."/>
+
+                            <CheckBox x:Name="CliKeepContext"
+                                      Margin="0,20,0,0"
+                                      Content="Remember the conversation between requests"/>
+                            <CheckBox x:Name="CliAutoSetup"
+                                      Content="Set up the selected CLI automatically on startup"/>
+
+                            <TextBlock Text="WORKING FOLDER" Style="{StaticResource Caption}"/>
+                            <TextBlock Style="{StaticResource Hint}" Text="Blank uses your user folder."/>
+                            <TextBox x:Name="CliWorkingDirectory"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- ========================= STANDBY ========================== -->
+                <TabItem Header="Standby">
+                    <ScrollViewer Padding="14,14,14,10" VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <CheckBox x:Name="StandbyEnabled"
+                                      Margin="0,0,0,4"
+                                      Content="Listen for my wake phrase"/>
+                            <TextBlock Style="{StaticResource Hint}"
+                                       Text="Say the wake phrase, ask, then say the send phrase."/>
+
+                            <TextBlock Text="WAKE PHRASE" Style="{StaticResource Caption}"/>
+                            <TextBox x:Name="WakePhrase"/>
+
+                            <TextBlock Text="SEND PHRASE" Style="{StaticResource Caption}"/>
+                            <TextBox x:Name="SendPhrase"/>
+
+                            <TextBlock Text="CANCEL PHRASE" Style="{StaticResource Caption}"/>
+                            <TextBox x:Name="CancelPhrase"/>
+
+                            <Grid Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="16"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="SEND AFTER SILENCE (SEC)" Style="{StaticResource Caption}"/>
+                                    <TextBox x:Name="SilenceTimeout"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="MAX REQUEST (SEC)" Style="{StaticResource Caption}"/>
+                                    <TextBox x:Name="MaxRequestSeconds"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <TextBlock Text="MIC SENSITIVITY" Style="{StaticResource Caption}"/>
+                            <DockPanel Margin="0,4,0,0">
+                                <TextBlock x:Name="SensitivityValue"
+                                           DockPanel.Dock="Right"
+                                           Width="48"
+                                           TextAlignment="Right"
+                                           VerticalAlignment="Center"
+                                           Foreground="{StaticResource Muted}"
+                                           FontSize="11"/>
+                                <Slider x:Name="Sensitivity"
+                                        Minimum="0.002" Maximum="0.15"
+                                        SmallChange="0.002" LargeChange="0.01"
+                                        ValueChanged="OnSensitivityChanged"
+                                        VerticalAlignment="Center"/>
+                            </DockPanel>
+                            <TextBlock Style="{StaticResource Hint}"
+                                       Text="Raise it in a noisy room; lower it if quiet speech is cut off."/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- ======================== PERSONAS ========================== -->
+                <TabItem Header="Personas">
+                    <DockPanel Margin="14,14,14,10">
+                        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,12,0,0">
+                            <Button Style="{StaticResource AccentButton}"
+                                    Content="New persona…"
+                                    Click="OnNewPersona"/>
+                            <Button Content="Import…" Click="OnImportPersona"/>
+                            <Button Content="Test the voice…" Click="OnTestTranslate"/>
+                            <TextBlock x:Name="PersonaStatus"
+                                       VerticalAlignment="Center"
+                                       Margin="10,0,0,0"
+                                       FontSize="11"
+                                       Foreground="{StaticResource Muted}"
+                                       TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+
+                        <ListBox x:Name="PersonaList"
+                                 HorizontalContentAlignment="Stretch"
+                                 Padding="4"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate DataType="{x:Type vm:PersonaRow}">
+                                    <DockPanel LastChildFill="True" Margin="4,5">
+                                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                            <Button Content="Use" Padding="12,4" Click="OnUsePersona"/>
+                                            <Button Content="Edit" Padding="12,4" Click="OnEditPersona"/>
+                                            <Button Content="Export" Padding="12,4" Click="OnExportPersona"/>
+                                            <Button Content="Delete" Padding="12,4" Click="OnDeletePersona"/>
+                                        </StackPanel>
+                                        <StackPanel VerticalAlignment="Center">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding Name}"
+                                                           FontSize="13" FontWeight="SemiBold"
+                                                           Foreground="{StaticResource Text}"/>
+                                                <Border Margin="8,0,0,0"
+                                                        Padding="6,1"
+                                                        CornerRadius="7"
+                                                        VerticalAlignment="Center"
+                                                        Background="#332CB5D0">
+                                                    <Border.Style>
+                                                        <Style TargetType="Border">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Border.Style>
+                                                    <TextBlock Text="{Binding ActiveLabel}"
+                                                               FontSize="10"
+                                                               Foreground="{StaticResource Accent}"/>
+                                                </Border>
+                                            </StackPanel>
+                                            <TextBlock Text="{Binding Subtitle}"
+                                                       Margin="0,3,0,0"
+                                                       FontSize="11"
+                                                       Foreground="{StaticResource Muted}"
+                                                       TextTrimming="CharacterEllipsis"/>
+                                        </StackPanel>
+                                    </DockPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </DockPanel>
+                </TabItem>
+
+                <!-- ========================== SPEECH ========================== -->
+                <TabItem Header="Speech">
+                    <ScrollViewer Padding="14,14,14,10" VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <TextBlock x:Name="WhisperState" Style="{StaticResource Hint}" TextWrapping="Wrap"/>
+
+                            <TextBlock Text="WHISPER BINARY" Style="{StaticResource Caption}"/>
+                            <TextBox x:Name="WhisperPath"/>
+
+                            <TextBlock Text="WHISPER MODEL (.bin)" Style="{StaticResource Caption}"/>
+                            <TextBox x:Name="WhisperModelPath"/>
+
+                            <TextBlock Text="PIPER BINARY" Style="{StaticResource Caption}"/>
+                            <TextBox x:Name="PiperPath"/>
+
+                            <TextBlock Text="PIPER VOICES FOLDER" Style="{StaticResource Caption}"/>
+                            <TextBox x:Name="PiperModelsDir"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- ========================= ADVANCED ========================= -->
+                <TabItem Header="Advanced">
+                    <ScrollViewer Padding="14,14,14,10" VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <TextBlock x:Name="GpuText" Style="{StaticResource Hint}"/>
+
+                            <TextBlock Text="LLAMA-SERVER BINARY" Style="{StaticResource Caption}"/>
+                            <TextBox x:Name="LlamaExe"/>
+
+                            <TextBlock Text="LLAMA MODEL (.gguf)" Style="{StaticResource Caption}"/>
+                            <TextBox x:Name="LlamaModel"/>
+
+                            <TextBlock Text="GPU LAYERS  (0 = CPU, 99 = full GPU)" Style="{StaticResource Caption}"/>
+                            <TextBox x:Name="LlamaGpuLayers"/>
+
+                            <TextBlock Text="IPC PORT FOR BROWSER AND EDITOR EXTENSIONS" Style="{StaticResource Caption}"/>
+                            <TextBox x:Name="IpcPort"/>
+
+                            <TextBlock x:Name="LogPath"
+                                       Style="{StaticResource Hint}"
+                                       Margin="0,16,0,0"
+                                       TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+            </TabControl>
+        </DockPanel>
+
+        <!-- Pane overlay: covers the tabs while a sub-screen is open. -->
+        <DockPanel x:Name="PagePane" Background="{StaticResource Bg}" Visibility="Collapsed">
+            <Border DockPanel.Dock="Top" Style="{StaticResource HeaderStrip}">
+                <DockPanel LastChildFill="True">
+                    <Button DockPanel.Dock="Left"
+                            Style="{StaticResource ToolbarIconButton}"
+                            Tag="{StaticResource IconBack}"
+                            Margin="0,0,8,0"
+                            AutomationProperties.Name="Back"
+                            ToolTip="Back"
+                            Click="OnPageBack"/>
+                    <TextBlock x:Name="PageTitle"
+                               VerticalAlignment="Center"
+                               FontSize="12" FontWeight="SemiBold"
+                               Foreground="{StaticResource Text}"
+                               TextTrimming="CharacterEllipsis"/>
+                </DockPanel>
+            </Border>
+            <ContentControl x:Name="PageHost"/>
+        </DockPanel>
+    </Grid>
+</Window>

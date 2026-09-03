@@ -1,0 +1,7 @@
+{
+  "id": "codex-desktop",
+  "processName": "Codex",
+  "responsePattern": "response",
+  "inputPattern": "prompt",
+  "stabilityMs": 1500
+}

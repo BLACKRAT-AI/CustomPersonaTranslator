@@ -1,0 +1,27 @@
+# .NET
+bin/
+obj/
+*.user
+.vs/
+
+# Node
+node_modules/
+npm-debug.log*
+.env
+
+# Tools/downloads
+tools/
+*.onnx
+*.bin
+
+# Installer build artifacts
+installer/build/
+installer/dist/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# IDE
+.idea/
+*.swp

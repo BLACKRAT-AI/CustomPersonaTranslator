@@ -1,0 +1,13 @@
+# Normalise line endings so a checkout on another machine does not show every
+# file as modified. Git stores LF; Windows working copies get CRLF.
+* text=auto
+
+# Binary assets Git must never try to convert.
+*.png binary
+*.jpg binary
+*.wav binary
+*.onnx binary
+*.bin binary
+*.gguf binary
+*.zip binary
+*.cptpersona binary

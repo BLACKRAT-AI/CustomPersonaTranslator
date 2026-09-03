@@ -1,0 +1,217 @@
+<v:SettingsPage x:Class="CPT.Shell.Views.PersonaEditorView"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:v="clr-namespace:CPT.Shell.Views"
+        Background="{StaticResource Bg}"
+        Foreground="{StaticResource Text}"
+        FontFamily="Segoe UI">
+    <Grid>
+        <!-- Header strip -->
+        <Border Style="{StaticResource HeaderStrip}" VerticalAlignment="Top">
+            <DockPanel>
+                <TextBlock x:Name="HeaderText" Text="NEW PERSONA"
+                           Foreground="{StaticResource Muted}"
+                           FontSize="11" FontWeight="SemiBold"
+                           VerticalAlignment="Center"/>
+                <TextBlock x:Name="StatusText" Text=""
+                           Foreground="{StaticResource Muted}"
+                           FontSize="11" Margin="16,0,0,0"
+                           HorizontalAlignment="Right"
+                           DockPanel.Dock="Right"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"/>
+            </DockPanel>
+        </Border>
+
+        <ScrollViewer Padding="22,46,22,12"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+            <StackPanel>
+
+                <!-- Persona name -->
+                <TextBlock Text="NAME" Style="{StaticResource Caption}" Margin="0,4,0,4"/>
+                <TextBox x:Name="NameBox" FontSize="16" Padding="10,8"/>
+
+                <!-- YouTube link, the 1-click input -->
+                <TextBlock Text="YOUTUBE LINK" Style="{StaticResource Caption}"/>
+                <TextBox x:Name="YoutubeBox" FontSize="13" Padding="10,8"/>
+                <TextBlock Style="{StaticResource Hint}" Margin="2,4,0,0">
+                    Captions become writing samples. Audio becomes the voice clone reference.
+                </TextBlock>
+
+                <!-- Voice. Kept out of Advanced on purpose: choosing whose voice
+                     this persona speaks in is the main decision, not a detail. -->
+                <TextBlock Text="VOICE" Style="{StaticResource Caption}" Margin="0,18,0,4"/>
+                <Border Padding="14,12"
+                        CornerRadius="8"
+                        Background="#FF1E1E1E"
+                        BorderBrush="{StaticResource BorderBr}"
+                        BorderThickness="1">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Style="{StaticResource AccentButton}"
+                                    Content="Pick from video…"
+                                    Click="OnPickVoiceFromVideo"
+                                    ToolTip="Play a YouTube video and mark the parts spoken in the voice you want"/>
+                            <Button Content="Use an audio file…" Click="OnPickVoice"/>
+                            <Button x:Name="ClearVoiceBtn"
+                                    Content="Clear"
+                                    Click="OnClearVoice"
+                                    Visibility="Collapsed"/>
+                        </StackPanel>
+
+                        <TextBlock x:Name="VoiceSampleSummary"
+                                   Margin="0,10,0,0"
+                                   FontSize="12"
+                                   TextTrimming="CharacterEllipsis"
+                                   Foreground="{StaticResource Text}"/>
+                        <TextBlock x:Name="VoiceSampleHint"
+                                   Style="{StaticResource Hint}"
+                                   Margin="0,3,0,0"
+                                   TextWrapping="Wrap"/>
+
+                        <CheckBox x:Name="LearnWordsFromSample"
+                                  Margin="0,10,0,0"
+                                  IsChecked="True"
+                                  Content="Also learn how they talk from this clip"
+                                  ToolTip="Transcribes the clip and uses the speaker's own phrasing as writing samples"/>
+
+                        <!-- The path itself, for pasting or checking. -->
+                        <TextBox x:Name="VoiceFileBox"
+                                 Margin="0,8,0,0"
+                                 FontSize="11"
+                                 TextChanged="OnVoiceFileChanged"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- Big create button -->
+                <Button Style="{StaticResource PrimaryButton}"
+                        x:Name="CreateBtn"
+                        Content="CREATE PERSONA"
+                        Click="OnCreate"
+                        Margin="0,20,0,0"
+                        HorizontalAlignment="Stretch"/>
+
+                <Expander x:Name="AdvancedExpander"
+                          Header="ADVANCED"
+                          Margin="0,22,0,0">
+                    <StackPanel Margin="0,8,0,0">
+
+                        <TextBlock Text="DESCRIPTION" Style="{StaticResource Caption}"/>
+                        <TextBox x:Name="DescriptionBox" Height="42"
+                                 TextWrapping="Wrap" AcceptsReturn="True"/>
+
+                        <TextBlock Text="EXTRA TEXT SAMPLES" Style="{StaticResource Caption}"/>
+                        <TextBox x:Name="TextSamplesBox" Height="84"
+                                 TextWrapping="Wrap" AcceptsReturn="True"
+                                 VerticalScrollBarVisibility="Auto"/>
+                        <TextBlock Style="{StaticResource Hint}" Margin="2,4,0,0">
+                            One quote per blank-line block. Appended to YouTube transcript.
+                        </TextBlock>
+
+                        <TextBlock Text="VOICE MODE" Style="{StaticResource Caption}"/>
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton x:Name="ModePreset" Content="Piper preset"
+                                         GroupName="VMode" IsChecked="True" Checked="OnModeChanged"/>
+                            <RadioButton x:Name="ModeClone" Content="Voice clone"
+                                         GroupName="VMode" Checked="OnModeChanged"/>
+                        </StackPanel>
+                        <DockPanel LastChildFill="True" Margin="0,4,0,0">
+                            <Button x:Name="SetupCloneBtn" DockPanel.Dock="Right"
+                                    Content="Set up cloning…" Click="OnSetupCloning"
+                                    Visibility="Collapsed"/>
+                            <TextBlock x:Name="CloneAvailability" Text=""
+                                       Style="{StaticResource Hint}"
+                                       VerticalAlignment="Center"/>
+                        </DockPanel>
+
+                        <StackPanel x:Name="PresetPanel">
+                            <TextBlock Text="PIPER VOICE" Style="{StaticResource Caption}"/>
+                            <DockPanel LastChildFill="True">
+                                <Button DockPanel.Dock="Right" Content="Audition" Click="OnAudition"/>
+                                <ComboBox x:Name="VoiceCombo" DisplayMemberPath="DisplayName"/>
+                            </DockPanel>
+                            <TextBlock x:Name="VoiceStatus" Text="" Style="{StaticResource Hint}" Margin="2,4,0,0"/>
+                        </StackPanel>
+
+                        <TextBlock Text="PERSONA IMAGE" Style="{StaticResource Caption}"/>
+                        <DockPanel LastChildFill="True">
+                            <Button DockPanel.Dock="Right" Content="Browse…" Click="OnPickImage"/>
+                            <TextBox x:Name="ImageFileBox"/>
+                        </DockPanel>
+
+                        <TextBlock Text="HOLOGRAM COLOR" Style="{StaticResource Caption}"/>
+                        <TextBox x:Name="ColorBox" Text="#6FC2D6"/>
+
+                        <TextBlock Text="IO PROVIDERS" Style="{StaticResource Caption}"/>
+                        <StackPanel Orientation="Horizontal">
+                            <CheckBox x:Name="IoLocal" Content="Local mic/speakers" IsChecked="True" Margin="0,0,16,0"/>
+                            <CheckBox x:Name="IoDiscordVoice" Content="Discord voice" Margin="0,0,16,0"/>
+                            <CheckBox x:Name="IoDiscordText" Content="Discord text"/>
+                        </StackPanel>
+
+                        <CheckBox x:Name="TranscriptPanel" Content="Show live transcript panel under hologram" Margin="0,10,0,0"/>
+
+                        <TextBlock Text="RESEARCH" Style="{StaticResource Caption}"/>
+                        <DockPanel LastChildFill="True">
+                            <Button DockPanel.Dock="Right" Content="Search" Click="OnResearch"/>
+                            <TextBox x:Name="ResearchBox" Text=""/>
+                        </DockPanel>
+                        <TextBlock x:Name="ResearchStatus" Text="" Style="{StaticResource Hint}" Margin="2,4,0,0"/>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <CheckBox x:Name="YtCaptions" Content="YouTube: fetch captions"
+                                      IsChecked="True" Margin="0,0,16,0"/>
+                            <CheckBox x:Name="YtAudio" Content="YouTube: fetch audio"
+                                      IsChecked="True"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Expander>
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,30">
+                    <Button Content="Cancel" Click="OnCancel"/>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- Loading overlay -->
+        <Border x:Name="LoadingOverlay" Visibility="Collapsed" Background="#F2161616">
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Width="380">
+                <Grid Width="64" Height="64" HorizontalAlignment="Center">
+                    <Ellipse Width="64" Height="64" Stroke="{StaticResource BorderBr}" StrokeThickness="3"/>
+                    <Ellipse x:Name="Spinner" Width="64" Height="64"
+                             Stroke="{StaticResource Text}" StrokeThickness="3"
+                             StrokeDashArray="2 6" StrokeDashCap="Round"
+                             RenderTransformOrigin="0.5,0.5">
+                        <Ellipse.RenderTransform>
+                            <RotateTransform x:Name="SpinnerRotate" Angle="0"/>
+                        </Ellipse.RenderTransform>
+                        <Ellipse.Triggers>
+                            <EventTrigger RoutedEvent="Ellipse.Loaded">
+                                <BeginStoryboard>
+                                    <Storyboard RepeatBehavior="Forever">
+                                        <DoubleAnimation Storyboard.TargetName="SpinnerRotate"
+                                                         Storyboard.TargetProperty="Angle"
+                                                         From="0" To="360" Duration="0:0:1.5"/>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </EventTrigger>
+                        </Ellipse.Triggers>
+                    </Ellipse>
+                </Grid>
+                <TextBlock x:Name="LoadingTitle" Text="Creating persona…"
+                           HorizontalAlignment="Center" FontSize="15" FontWeight="SemiBold"
+                           Margin="0,18,0,8" Foreground="{StaticResource Text}"/>
+                <TextBlock x:Name="LoadingStep" Text=""
+                           HorizontalAlignment="Center" FontSize="12" Foreground="{StaticResource Muted}"/>
+                <Border Background="{StaticResource FieldBg}" BorderBrush="{StaticResource BorderBr}"
+                        BorderThickness="1" CornerRadius="3" Margin="0,14,0,0" Padding="12,8" MaxHeight="180">
+                    <ScrollViewer x:Name="LoadingLogScroller" VerticalScrollBarVisibility="Auto">
+                        <TextBlock x:Name="LoadingLog" FontFamily="Consolas" FontSize="11"
+                                   Foreground="{StaticResource Muted}" TextWrapping="Wrap"/>
+                    </ScrollViewer>
+                </Border>
+            </StackPanel>
+        </Border>
+    </Grid>
+</v:SettingsPage>
