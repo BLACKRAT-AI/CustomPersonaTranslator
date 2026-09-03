@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using CPT.Core.Diagnostics;
 using CPT.Core.Filter;
 using CPT.Core.Llm;
 using CPT.Core.Models;
@@ -68,9 +70,10 @@ public sealed class TranslationPipeline : IDisposable
 
         OnAppear?.Invoke(persona.Name);
 
+        // The player is built from the first audio that actually arrives, not
+        // from what the engine predicts it will produce.
         _player?.Dispose();
-        _player = new StreamingAudioPlayer(_tts.SampleRate, _tts.Channels, _tts.BitsPerSample);
-        _player.LevelChanged += level => OnAudioLevel?.Invoke(level);
+        _player = null;
 
         var sentenceBuf = new StringBuilder();
         try
@@ -83,11 +86,7 @@ public sealed class TranslationPipeline : IDisposable
             // first word would be worse than the risk.
             if (spoken.Length <= VerifyRewriteMaxChars)
             {
-                var rewrite = new StringBuilder();
-                await foreach (var token in _llm.StreamRewriteAsync(persona, spoken, ct))
-                    rewrite.Append(token);
-
-                var text = rewrite.ToString().Trim();
+                var text = await RewriteAsync(persona, spoken, ct).ConfigureAwait(false);
                 if (!PersonaRewrite.KeepsSubstance(spoken, text))
                 {
                     OnEngineFallback?.Invoke("The persona rewrite lost the answer — speaking it plainly.");
@@ -138,54 +137,122 @@ public sealed class TranslationPipeline : IDisposable
         }
     }
 
-    private async Task SpeakAsync(string text, Persona persona, CancellationToken ct)
+    /// <summary>
+    /// Rewrites the answer in the persona's voice, or gives the answer back
+    /// unchanged if the local model cannot be reached.
+    ///
+    /// Losing the persona's manner is a cosmetic failure. Losing the ANSWER is
+    /// not: the user asked a coding agent a question and is owed the reply. So
+    /// a local model that is down, still loading, or erroring degrades to a
+    /// plainly-spoken answer rather than to silence, which is what "I asked a
+    /// question and nothing happened" actually was.
+    /// </summary>
+    private async Task<string> RewriteAsync(Persona persona, string spoken, CancellationToken ct)
     {
-        if (_player is null) return;
-        // Per-engine voice reference: Chatterbox wants the audio sample file path
-        // as its audio_prompt_path; Piper wants the preset model id.
-        // (Earlier this always passed persona.Voice.VoiceRef which silently fed
-        //  Chatterbox the Piper preset name, causing fallback to its default voice.)
-        var voiceRefForEngine = _tts is Tts.ChatterboxTts && !string.IsNullOrEmpty(persona.Voice.VoiceSampleFile)
-            ? persona.Voice.VoiceSampleFile!
-            : persona.Voice.VoiceRef;
+        var rewrite = new StringBuilder();
         try
         {
-            await foreach (var pcm in _tts.SynthesizeStreamAsync(text, voiceRefForEngine, ct))
-            {
-                // Engines update their reported sample rate after each synth
-                // (Chatterbox can report a different rate post-warmup). If the
-                // player is mixing at a stale rate, audio plays fast/slow and
-                // the voice loses character — rebuild the player at the live
-                // rate before writing.
-                if (_tts.SampleRate != _player.SampleRate
-                    || _tts.Channels != _player.Channels
-                    || _tts.BitsPerSample != _player.BitsPerSample)
-                {
-                    _player.Dispose();
-                    _player = new StreamingAudioPlayer(_tts.SampleRate, _tts.Channels, _tts.BitsPerSample);
-                    _player.LevelChanged += level => OnAudioLevel?.Invoke(level);
-                }
-                _player.Write(pcm);
-            }
+            await foreach (var token in _llm.StreamRewriteAsync(persona, spoken, ct).ConfigureAwait(false))
+                rewrite.Append(token);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is System.Net.Http.HttpRequestException or IOException
+                                      or InvalidOperationException or TaskCanceledException)
+        {
+            CptLog.Write("[pipeline] persona rewrite unavailable, speaking the answer plainly: " + ex.Message);
+            OnEngineFallback?.Invoke("Persona voice model unavailable — speaking the answer plainly.");
+            return spoken;
+        }
+
+        return rewrite.ToString().Trim();
+    }
+
+    /// <summary>
+    /// Speaks one piece of text through the current engine.
+    ///
+    /// The player is created lazily, from the format of the audio that actually
+    /// arrives, and is never rebuilt while audio is queued. It used to be
+    /// rebuilt mid-sentence whenever the engine's reported sample rate changed,
+    /// which threw away whatever was still playing and left the rest of the
+    /// reply running at the wrong rate -- the voice audibly speeding up.
+    /// </summary>
+    private async Task SpeakAsync(string text, Persona persona, CancellationToken ct)
+    {
+        // Per-engine voice reference: Chatterbox wants the audio sample file path
+        // as its audio_prompt_path; Piper wants the preset model id.
+        var cloneRef = !string.IsNullOrEmpty(persona.Voice.VoiceSampleFile)
+            ? persona.Voice.VoiceSampleFile!
+            : persona.Voice.VoiceRef;
+
+        try
+        {
+            await StreamAsync(_tts, _tts is Tts.ChatterboxTts ? cloneRef : persona.Voice.VoiceRef, text, ct)
+                .ConfigureAwait(false);
+            _cloneFailures = 0;
+        }
+        catch (OperationCanceledException)
+        {
+            // A newer reply superseded this one. NOT an engine failure -- treating
+            // it as one is what silently demoted every later reply to the preset
+            // voice, so the persona was lost for the rest of the session.
+            throw;
         }
         catch (Exception ex) when (_tts == _cloneTts && _piperTts is not null)
         {
-            // Clone engine failed (e.g. Python subprocess died, model not downloaded yet,
-            // CUDA OOM). Tell the UI and fall back to the preset voice for this utterance
-            // so the user still hears something — and so future utterances also use Piper
-            // until the persona is reloaded.
-            var msg = ex.Message;
-            OnEngineFallback?.Invoke("Voice clone failed: " + msg + ". Falling back to preset voice.");
-            _tts = _piperTts;
-            _player.Dispose();
-            _player = new StreamingAudioPlayer(_tts.SampleRate, _tts.Channels, _tts.BitsPerSample);
-            _player.LevelChanged += level => OnAudioLevel?.Invoke(level);
-            // After fallback _tts == _piperTts, which always wants VoiceRef.
-            await foreach (var pcm in _tts.SynthesizeStreamAsync(text, persona.Voice.VoiceRef, ct))
-                _player.Write(pcm);
+            // The clone engine failed for THIS utterance (Python died, model not
+            // downloaded, CUDA out of memory). Speak it with the preset voice so
+            // the user still hears the answer, but keep the clone engine selected:
+            // one bad synth is not a reason to abandon the persona's voice for
+            // the rest of the session.
+            _cloneFailures++;
+            CptLog.Write($"[tts] clone synth failed ({_cloneFailures}): {ex.Message}");
+            OnEngineFallback?.Invoke("Voice clone failed: " + ex.Message + ". Using the preset voice.");
+
+            if (_cloneFailures >= CloneFailuresBeforeGivingUp)
+            {
+                CptLog.Write("[tts] clone engine failed repeatedly; staying on the preset voice.");
+                _tts = _piperTts;
+            }
+
+            await StreamAsync(_piperTts, persona.Voice.VoiceRef, text, ct).ConfigureAwait(false);
         }
     }
 
+    /// <summary>Synthesises with one engine and feeds the player.</summary>
+    private async Task StreamAsync(ITtsEngine engine, string voiceRef, string text, CancellationToken ct)
+    {
+        await foreach (var pcm in engine.SynthesizeStreamAsync(text, voiceRef, ct).ConfigureAwait(false))
+        {
+            await EnsurePlayerAsync(engine, ct).ConfigureAwait(false);
+            _player!.Write(pcm);
+        }
+    }
+
+    /// <summary>
+    /// Gives the utterance a player matching the engine's live format, draining
+    /// anything already queued before swapping so no audio is cut off.
+    /// </summary>
+    private async Task EnsurePlayerAsync(ITtsEngine engine, CancellationToken ct)
+    {
+        if (_player is not null
+            && _player.SampleRate == engine.SampleRate
+            && _player.Channels == engine.Channels
+            && _player.BitsPerSample == engine.BitsPerSample)
+            return;
+
+        if (_player is not null)
+        {
+            try { await _player.WaitForDrainAsync(ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+            _player.Dispose();
+        }
+
+        _player = new StreamingAudioPlayer(engine.SampleRate, engine.Channels, engine.BitsPerSample);
+        _player.LevelChanged += level => OnAudioLevel?.Invoke(level);
+    }
     /// <summary>
     /// How long an answer can be and still be rewritten in full before any of
     /// it is spoken. Nearly every spoken agent reply is well under this.
@@ -223,6 +290,11 @@ public sealed class TranslationPipeline : IDisposable
 
         return parts.Count == 0 ? [text] : parts;
     }
+
+    /// <summary>Consecutive clone failures before the preset voice becomes sticky.</summary>
+    private const int CloneFailuresBeforeGivingUp = 3;
+
+    private int _cloneFailures;
 
     private static bool HasSentenceEnd(string s)
     {

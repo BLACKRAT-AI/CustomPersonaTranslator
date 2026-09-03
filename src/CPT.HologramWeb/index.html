@@ -65,7 +65,6 @@ function apply(message) {
       // is swept around itself so the projection still reads as moving.
       hologram.setPalette(message.color);
       clock.setPalette(message.color);
-      if (message.size) hologram.setHeadScale(message.size);
       break;
 
     case 'appear':
@@ -111,6 +110,7 @@ window.chrome.webview.addEventListener('message', (event) => {
   if (message && message.type) apply(message);
 });
 
+// The head is sized from the canvas, so a resized panel is a resized head.
 window.addEventListener('resize', () => hologram.relayout());
 
 window.chrome.webview.postMessage(JSON.stringify({ type: 'ready' }));

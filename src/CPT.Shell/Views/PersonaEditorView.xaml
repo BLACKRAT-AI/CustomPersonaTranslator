@@ -126,13 +126,14 @@
                                        TextAlignment="Right" VerticalAlignment="Center"
                                        Foreground="{StaticResource Text}" FontSize="12"/>
                             <Slider x:Name="SizeSlider"
-                                    Minimum="1" Maximum="6" Value="3"
-                                    TickFrequency="0.5" IsSnapToTickEnabled="True"
+                                    Minimum="0.6" Maximum="2" Value="1"
+                                    SmallChange="0.1" LargeChange="0.2"
+                                    TickFrequency="0.1" IsSnapToTickEnabled="True"
                                     ValueChanged="OnHologramSizeChanged"
-                                    ToolTip="How large the projected head is. The window grows to fit it."/>
+                                    ToolTip="How wide the panel is. The hologram fills it, so this is its size too."/>
                         </DockPanel>
                         <TextBlock Style="{StaticResource Hint}" Margin="72,4,0,0">
-                            The window resizes to fit the head.
+                            The panel resizes, and the hologram fills it.
                         </TextBlock>
                     </StackPanel>
                 </Border>

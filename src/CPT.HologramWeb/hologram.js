@@ -14,6 +14,15 @@ import { makePalette } from './palette.js';
 
 const TAU = Math.PI * 2;
 
+/** Width of the head cloud in normalised units (measured from the asset: ±0.288). */
+const HEAD_WIDTH = 0.576;
+
+/** The head size the particle count is calibrated against. */
+const BASE_SCALE = 200;
+
+/** A dot is always this big. Crispness is not a function of panel size. */
+const DOT_RADIUS = 1.3;
+
 // ── LIP SIZE — DO NOT RE-TUNE BY HAND ───────────────────────────────────────
 // Carried over verbatim from SYNTAX, where the mouth size kept regressing
 // because it was re-derived from scattered magic numbers on every "shrink the
@@ -79,7 +88,6 @@ export class Hologram {
     this._gzY = 0; this._gzP = 0; this._gzTY = 0; this._gzTP = 0; this._nextGaze = 0;
     this._gzVY = 0; this._gzVP = 0;   // gaze velocities (a damped spring → smooth ease-in/out, no lurch)
     this.ring = null;           // the Prismatic clock — shared phase and energy
-    this.headScale = 3;         // persona's size multiplier; 1 is the size this was designed at
     this.palette = makePalette('prismatic');
     this.reduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
     this._lingering = false;    // after speech, hold the head open for one idle look before folding
@@ -90,8 +98,6 @@ export class Hologram {
 
   setPalette(colour) { this.palette = makePalette(colour); this._kick(); }
 
-  /** How large the head is drawn, as a multiple of the panel-relative base. */
-  setHeadScale(v) { this.headScale = Math.max(0.5, Math.min(6, Number(v) || 3)); this._kick(); }
 
   start() { this._kick(); }
   relayout() { this._kick(); }
@@ -272,15 +278,14 @@ export class Hologram {
     this._gzVY += (tgtY - this._gzY) * gk * f; this._gzVY *= Math.pow(gd, f); this._gzY += this._gzVY * f;
     this._gzVP += (tgtP - this._gzP) * gk * f; this._gzVP *= Math.pow(gd, f); this._gzP += this._gzVP * f;
   }
-
   /**
-   * The modal's edge: the top line of the bar this window is anchored to, which
-   * is exactly the bottom of this canvas. The projection pours out of the WHOLE
-   * edge rather than out of an aperture, so every dot leaves from the point on
-   * that line closest to where it is going.
+   * The projector's aperture: a small opening at the middle of the panel's
+   * bottom edge. The light and every particle come out of THIS, which is what
+   * makes it read as a projection rather than as a glowing floor.
    */
   _emitter(w, h) {
-    return { y: h - 1, left: w * 0.06, right: w * 0.94, cx: w / 2 };
+    const halfWidth = Math.max(6, w * 0.05);
+    return { y: h - 2, cx: w / 2, half: halfWidth };
   }
 
   _drawProjection(ctx, w, h) {
@@ -289,17 +294,15 @@ export class Hologram {
     const emitter = this._emitter(w, h);
     const phase = this.ring ? this.ring.phase : (this.t * 0.012) % 1;
 
-    // SYNTAX's bottom-up layout: the head sits at two fifths of the panel's
-    // height so the beam off the edge stays long enough to read. The persona's
-    // own multiplier scales it, clamped to whatever the panel can actually hold.
-    const base = Math.min(h * 0.6, w * 0.62, 188);
-    const scale = Math.max(60, Math.min(base * this.headScale, h * 0.66, w * 0.94));
+    // The head fills the panel it is given. Width is the driver -- the panel is
+    // what the user resizes -- with the height as the other limit so a short
+    // panel crops nothing. There is no separate size multiplier any more: a
+    // bigger panel IS a bigger head, which is why the sides used to be empty.
+    const scale = Math.min(w * 0.94 / HEAD_WIDTH, h * 0.94);
     const headX = emitter.cx;
-    const headY = Math.max(scale * 0.54, h * 0.40 - (scale - base) * 0.28);
+    const headY = scale * 0.52 + h * 0.02;
 
     this._drawGlow(ctx, emitter, headY, scale, phase);
-    this._drawAura(ctx, headX, headY, scale);
-
 
     const head = this._head3d();
     if (!head || !head.ok || !head.loaded || this.head <= 0.01) return;
@@ -308,7 +311,20 @@ export class Hologram {
     const mouthCx = head.mouthN ? head.mouthN[0] : 0;
     const mouthCy = head.mouthN ? head.mouthN[1] : 0.12;
 
-    if (!this._pool || this._pool.length !== targets.length) this._pool = targets.map((p) => makeParticle(p));
+    // DENSITY, NOT DOT SIZE.
+    //
+    // A dot is a dot: 1.3 px, always, at every panel size. Scaling the dots
+    // with the head is what turned a crisp face into a handful of fat blobs.
+    // What scales instead is HOW MANY there are -- the cloud is a sampling of a
+    // surface, so a bigger surface gets proportionally more samples and the
+    // density on screen, and therefore the crispness, never changes.
+    const copies = Math.max(1, Math.min(6, Math.round((scale * scale) / (BASE_SCALE * BASE_SCALE))));
+    if (!this._pool || this._copies !== copies || this._pool.length !== targets.length * copies) {
+      this._copies = copies;
+      this._pool = [];
+      for (let c = 0; c < copies; c++)
+        for (const target of targets) this._pool.push(makeParticle(target, c));
+    }
 
     const openV = this.rise;
     const resolve = Math.min(1, this.head);
@@ -318,9 +334,6 @@ export class Hologram {
     const yaw = this._gzY, pitch = this._gzP;
     const cosY = Math.cos(yaw), sinY = Math.sin(yaw), cosP = Math.cos(pitch), sinP = Math.sin(pitch);
     const step = this.reduced ? 0 : 0.016;
-    // Dots grow with the head, so a 3x projection is not the same 1.15px specks
-    // scattered over three times the area.
-    const dotRadius = Math.max(1.15, scale / 150);
 
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
@@ -332,7 +345,7 @@ export class Hologram {
       if (p.t >= p.life) { recycle(p); continue; }
       if (p.t < 0) continue;                     // a brief gap before its replacement flies in
 
-      const target = targets[k];
+      const target = targets[k % targets.length];
       const has3d = target.length >= 5;
       const vW = has3d ? target[3] : target[2];
       const hW = (has3d ? target[4] : target[3]) || 0;
@@ -341,8 +354,8 @@ export class Hologram {
       // smaller — the spread and travel multipliers only shrink the OPEN
       // animation, not the mouth at rest.
       const isLip = Math.abs(vW) > LIP.LIP_THRESHOLD || hW > LIP.LIP_THRESHOLD;
-      const bx = isLip ? mouthCx + (target[0] - mouthCx) * LIP.RESTING_PULL_IN : target[0];
-      const by = isLip ? mouthCy + (target[1] - mouthCy) * LIP.RESTING_PULL_IN : target[1];
+      const bx = (isLip ? mouthCx + (target[0] - mouthCx) * LIP.RESTING_PULL_IN : target[0]) + p.jx;
+      const by = (isLip ? mouthCy + (target[1] - mouthCy) * LIP.RESTING_PULL_IN : target[1]) + p.jy;
 
       let rx = bx;
       if (hW > 0) rx += (bx - mouthCx) * this.vWide * hW * LIP.WIDTH_SPREAD;   // corners spread wide / round in
@@ -358,9 +371,10 @@ export class Hologram {
       // THE EMITTER: each dot leaves the modal's edge at the point directly
       // below where it is going, so the stream pours off the whole edge rather
       // than out of one hole. The jitter keeps the line from looking stippled.
-      const ox = Math.max(emitter.left, Math.min(emitter.right, tx + (p.spread - 0.5) * scale * 0.5));
+      // Out of the aperture, and only the aperture -- a projector has one
+      // opening. The spread across its narrow width is what fans the beam.
+      const ox = emitter.cx + (p.spread - 0.5) * 2 * emitter.half;
       const oy = emitter.y;
-
 
       let x, y, a;
       if (p.t < p.fly) {
@@ -370,69 +384,62 @@ export class Hologram {
         x = tx; y = ty; a = 1 - (p.t - p.fly) / (p.life - p.fly);   // settle → fade → replaced
       }
 
-      // Brightness. The projection is drawn over the desktop, not over a dark
-      // page, so the SYNTAX alpha left it almost invisible; the aura behind the
-      // head is what makes it safe to push this up.
-      ctx.globalAlpha = a * resolve * 0.92;
+      // Brightness. The panel behind the head is dark, so this can sit well
+      // above SYNTAX's alpha without the face turning into a white smear.
+      ctx.globalAlpha = a * resolve * 0.85;
       // Colour by position across the face, scrolling with the phase so the head
       // and the bar's border share one moving spectrum.
       ctx.fillStyle = this.palette.at(((x - emitter.cx) / Math.max(1, scale)) * 0.5 - phase, 0.72, 0.74);
-      ctx.beginPath(); ctx.arc(x, y, dotRadius, 0, TAU); ctx.fill();
+      ctx.beginPath(); ctx.arc(x, y, DOT_RADIUS, 0, TAU); ctx.fill();
 
     }
     ctx.restore();
   }
-  /**
-   * The dark halo the head is read against.
-   *
-   * This is why SYNTAX's projection is legible and the first version of this one
-   * was not: bright thin dots drawn straight over a bright desktop have almost
-   * no contrast. A soft dark disc behind the head gives them something to sit
-   * on without putting a hard-edged panel on screen.
-   */
-  _drawAura(ctx, headX, headY, scale) {
-    // Tight on purpose: this is contrast directly behind the face, not a panel.
-    // Spread it wide and it stops reading as a shadow and becomes a grey haze
-    // over the whole window.
-    const radius = scale * 0.60;
-    const gradient = ctx.createRadialGradient(headX, headY, radius * 0.1, headX, headY, radius);
-    const depth = 0.80 * Math.min(1, this.head + this.rise * 0.5);
-    gradient.addColorStop(0.0, `rgba(3,5,9,${depth})`);
-    gradient.addColorStop(0.62, `rgba(3,5,9,${depth * 0.5})`);
-    gradient.addColorStop(1.0, 'rgba(3,5,9,0)');
-
-    ctx.save();
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = gradient;
-    ctx.beginPath(); ctx.arc(headX, headY, radius, 0, TAU); ctx.fill();
-    ctx.restore();
-  }
 
   /**
-   * The light the projection casts: a soft dome of light standing on the modal's
-   * edge, where the particles come from.
+   * The projector's beam: a cone opening upward out of the aperture.
    *
-   * Drawn as a radial gradient rather than a blurred polygon. A polygon with a
-   * canvas blur filter left hard vertical edges where the blur's own bounding
-   * box clipped it, which read as a translucent BOX sitting over the window --
-   * the opposite of a beam. A gradient has no edges to clip.
+   * Clipped to a shape that stays inside the panel and fades to nothing before
+   * it reaches any edge. The previous version was a circle centred on the
+   * bottom edge, so the panel sliced two hard chords out of it -- the light
+   * looked cut off rather than cast.
    */
   _drawGlow(ctx, emitter, headY, scale, phase) {
-    const reach = Math.min(emitter.y - headY, scale * 0.9);
-    if (reach < 8) return;
+    const top = Math.max(2, headY - scale * 0.36);
+    const height = emitter.y - top;
+    if (height < 8) return;
 
-    const gradient = ctx.createRadialGradient(
-      emitter.cx, emitter.y, reach * 0.05, emitter.cx, emitter.y, reach);
+    const halfTop = Math.min(scale * 0.46, emitter.cx * 0.92);
     const lit = this.flicker * this.rise;
-    gradient.addColorStop(0.0, this.palette.at(phase, 0.7, 0.8, 0.26 * lit));
-    gradient.addColorStop(0.45, this.palette.at(phase + 0.15, 0.62, 0.78, 0.10 * lit));
-    gradient.addColorStop(1.0, this.palette.at(phase + 0.3, 0.6, 0.76, 0));
+
+    // Vertical fade along the beam, and the cone's own taper does the sideways
+    // fade -- no blur filter, which is what produced hard rectangular edges.
+    const gradient = ctx.createLinearGradient(0, emitter.y, 0, top);
+    gradient.addColorStop(0.0, this.palette.at(phase, 0.72, 0.80, 0.30 * lit));
+    gradient.addColorStop(0.35, this.palette.at(phase + 0.12, 0.66, 0.78, 0.13 * lit));
+    gradient.addColorStop(1.0, this.palette.at(phase + 0.3, 0.62, 0.76, 0));
 
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.fillStyle = gradient;
+
+    // Curved sides, so the cone has no hard diagonal edge either.
     ctx.beginPath();
-    ctx.arc(emitter.cx, emitter.y, reach, 0, TAU);
+    ctx.moveTo(emitter.cx - emitter.half, emitter.y);
+    ctx.quadraticCurveTo(emitter.cx - halfTop * 0.55, top + height * 0.45, emitter.cx - halfTop, top);
+    ctx.lineTo(emitter.cx + halfTop, top);
+    ctx.quadraticCurveTo(emitter.cx + halfTop * 0.55, top + height * 0.45, emitter.cx + emitter.half, emitter.y);
+    ctx.closePath();
+    ctx.fill();
+
+    // The aperture itself, bright where the light leaves it.
+    const mouth = ctx.createRadialGradient(
+      emitter.cx, emitter.y, 0, emitter.cx, emitter.y, emitter.half * 2.6);
+    mouth.addColorStop(0, this.palette.at(phase, 0.5, 0.95, 0.55 * lit));
+    mouth.addColorStop(1, this.palette.at(phase, 0.6, 0.8, 0));
+    ctx.fillStyle = mouth;
+    ctx.beginPath();
+    ctx.arc(emitter.cx, emitter.y, emitter.half * 2.6, 0, TAU);
     ctx.fill();
     ctx.restore();
   }
@@ -451,13 +458,22 @@ export class Hologram {
  * get a short fly-in and a long life so they spend most of their cycle parked on
  * the lips, where the per-frame jaw offset is visible. Face dots keep the churn.
  */
-function makeParticle(target) {
+function makeParticle(target, copy = 0) {
   const has3d = target.length >= 5;
   const vW = has3d ? target[3] : target[2];
   const hW = (has3d ? target[4] : target[3]) || 0;
   const lip = Math.abs(vW) > LIP.LIP_THRESHOLD || hW > LIP.LIP_THRESHOLD;
 
-  const p = { spread: Math.random(), lip, off: lip && Math.random() < LIP.DENSITY_DROP };
+  // Copies beyond the first are offset slightly along the surface, so extra
+  // density is extra SAMPLING of the same face rather than dots stacked on dots.
+  const jitter = copy === 0 ? 0 : 0.0045;
+  const p = {
+    spread: Math.random(),
+    lip,
+    off: lip && Math.random() < LIP.DENSITY_DROP,
+    jx: (Math.random() - 0.5) * jitter,
+    jy: (Math.random() - 0.5) * jitter,
+  };
   recycle(p, true);
   return p;
 }

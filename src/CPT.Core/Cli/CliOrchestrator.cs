@@ -20,7 +20,7 @@ namespace CPT.Core.Cli;
 public sealed class CliOrchestrator : IDisposable
 {
     private readonly SemaphoreSlim _agentLock = new(1, 1);
-    private readonly string? _workingDirectory;
+    private string? _workingDirectory;
 
     private CliProvider _provider;
     private CliAgent? _agent;
@@ -73,6 +73,30 @@ public sealed class CliOrchestrator : IDisposable
 
         UpdateStatus(new CliStatus(provider, CliReadiness.Unknown, null, null, "Checking..."));
         return await RefreshAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+
+    /// <summary>
+    /// Points the orchestrator at one agent's CLI and directory in a single
+    /// step.
+    ///
+    /// Both together, because an agent is the pair: switching provider without
+    /// switching directory would run the new CLI against the previous agent's
+    /// repository.
+    /// </summary>
+    public void Select(string providerId, string? workingDirectory)
+    {
+        var provider = CliProviderCatalog.Find(providerId);
+        var directoryChanged = !string.Equals(_workingDirectory, workingDirectory, StringComparison.OrdinalIgnoreCase);
+        if (provider is null && !directoryChanged) return;
+
+        _workingDirectory = workingDirectory;
+        if (directoryChanged) _agent = null;          // rebuilt on the next turn, in the new directory
+
+        if (provider is not null && provider.Id != _provider.Id)
+            _ = SelectProviderAsync(provider.Id);
+        else if (directoryChanged)
+            _ = RefreshAsync();
     }
 
     /// <summary>Re-probes the selected provider and publishes the result.</summary>

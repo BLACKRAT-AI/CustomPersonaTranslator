@@ -139,7 +139,8 @@ public sealed partial class PersonaEditorView : SettingsPage
         ColorCombo.SelectedItem = match ?? ColorOptions[^1];
         if (match is null) ColorBox.Text = stored;
 
-        SizeSlider.Value = Math.Clamp(persona?.Visual.HologramScale ?? 3.0, 1, 6);
+        var storedScale = persona?.Visual.HologramScale ?? 1.0;
+        SizeSlider.Value = Math.Clamp(storedScale >= 2.5 ? 1.0 : storedScale, 0.6, 2.0);
         ShowSizeValue();
     }
 
@@ -510,7 +511,7 @@ public sealed partial class PersonaEditorView : SettingsPage
             {
                 LoadingTitle.Text = "Preparing voice clone…";
                 var prog = new Progress<string>(s => Dispatcher.Invoke(() => Step(s)));
-                try { await _services.WarmCloneAsync(persona, prog); }
+                try { await WithTimeout(_services.WarmCloneAsync(persona, prog), WarmupBudget); }
                 catch (Exception ex)
                 {
                     Step("Clone preload failed: " + ex.Message);
@@ -525,7 +526,7 @@ public sealed partial class PersonaEditorView : SettingsPage
             Step("Routing confirmation through LLM rewrite + persona voice…");
             try
             {
-                await _services.SpeakConfirmationAsync(persona);
+                await WithTimeout(_services.SpeakConfirmationAsync(persona), ConfirmationBudget);
                 Step("Done.");
             }
             catch (Exception ex)
@@ -540,10 +541,38 @@ public sealed partial class PersonaEditorView : SettingsPage
         }
         catch (Exception ex)
         {
-            HideLoading();
-            IsEnabled = true;
             StatusText.Text = "Could not save: " + ex.Message;
         }
+        finally
+        {
+            // ALWAYS. The overlay used to come down only on the error path and
+            // on navigation, so a warm-up or confirmation that never returned
+            // left the spinner turning over a persona that had actually saved.
+            HideLoading();
+            IsEnabled = true;
+        }
+    }
+
+
+    /// <summary>How long the clone model gets to warm up before saving moves on.</summary>
+    private static readonly TimeSpan WarmupBudget = TimeSpan.FromMinutes(3);
+
+    /// <summary>How long the spoken confirmation gets. It is a nicety, not the save.</summary>
+    private static readonly TimeSpan ConfirmationBudget = TimeSpan.FromSeconds(45);
+
+    /// <summary>
+    /// Waits for a step, but never forever.
+    ///
+    /// Warming the clone model and speaking a confirmation both depend on
+    /// subprocesses that can hang. Neither is part of saving the persona, so
+    /// neither is allowed to hold the UI: the persona is already on disk by the
+    /// time these run.
+    /// </summary>
+    private static async Task WithTimeout(Task work, TimeSpan budget)
+    {
+        var finished = await Task.WhenAny(work, Task.Delay(budget)).ConfigureAwait(true);
+        if (finished != work) throw new TimeoutException($"Timed out after {budget.TotalSeconds:0}s.");
+        await work.ConfigureAwait(true);
     }
 
     private List<string> BuildIoProviders()

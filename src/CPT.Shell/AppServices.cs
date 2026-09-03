@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using CPT.Core.Cli;
+using CPT.Core.Agents;
 using CPT.Core.Cli.Streaming;
 using CPT.Core.Diagnostics;
 using CPT.Core.Hardware;
@@ -211,6 +212,9 @@ public sealed class AppServices : IDisposable
             }
 
             var answer = reply.ToString().Trim();
+            CptLog.Write($"[cli] turn returned {answer.Length} chars"
+                + (failure is null ? "" : " (error: " + failure + ")"));
+
             if (answer.Length > 0)
             {
                 await SpeakInPersonaAsync(answer, cancellationToken).ConfigureAwait(false);
@@ -225,6 +229,13 @@ public sealed class AppServices : IDisposable
         catch (OperationCanceledException)
         {
             // Superseded by a newer request, or shutting down.
+        }
+        catch (Exception ex)
+        {
+            // Nothing below here may fail silently. A turn that throws and says
+            // nothing is indistinguishable from the app ignoring the question.
+            CptLog.Write("[agent] turn failed: " + ex);
+            OnNotification?.Invoke("That turn failed: " + ex.Message);
         }
         finally
         {
@@ -301,8 +312,30 @@ public sealed class AppServices : IDisposable
         await RouteRequestAsync(transcript).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Sends a spoken request to the right place.
+    ///
+    /// An agent's trigger phrase at the front wins: it switches the active agent
+    /// and the rest of the sentence is the question. That is what makes it
+    /// possible to leave standby listening and address a different agent just by
+    /// naming it.
+    /// </summary>
     private async Task RouteRequestAsync(string request)
     {
+        var route = AgentRouter.Route(request, Settings.Agents.Agents);
+        if (route.Agent is not null)
+        {
+            CptLog.Write($"[route] \"{route.Agent.TriggerPhrase}\" -> agent {route.Agent.Name}");
+            SetActiveAgent(route.Agent.Id);
+            request = route.Request;
+
+            if (string.IsNullOrWhiteSpace(request))
+            {
+                OnNotification?.Invoke($"{route.Agent.Name} is listening.");
+                return;
+            }
+        }
+
         if (Cli.IsReady)
         {
             await AskAgentAsync(request).ConfigureAwait(false);
@@ -315,7 +348,51 @@ public sealed class AppServices : IDisposable
             return;
         }
 
+        CptLog.Write("[route] no agent linked; request dropped: " + request);
         OnNotification?.Invoke($"Heard “{request}”, but no agent is linked yet.");
+    }
+
+    // --- agents -----------------------------------------------------------
+
+    /// <summary>Raised when the agent list or the active agent changes.</summary>
+    public event Action? OnAgentsChanged;
+
+    /// <summary>The agent currently answering, or null when none are configured.</summary>
+    public AgentProfile? ActiveAgent => Settings.Agents.Active;
+
+    /// <summary>
+    /// Makes one agent the one that answers: its CLI runs the turn and its
+    /// persona speaks the reply.
+    /// </summary>
+    public void SetActiveAgent(string? agentId)
+    {
+        var agent = Settings.Agents.ById(agentId);
+        if (agent is null) return;
+
+        Settings.Agents.ActiveId = agent.Id;
+        Settings.Save();
+
+        if (Personas.Get(agent.PersonaId) is { } persona) SetActivePersona(persona);
+        ApplyAgentCli(agent);
+        OnAgentsChanged?.Invoke();
+    }
+
+    /// <summary>Points the CLI orchestrator at this agent's provider and directory.</summary>
+    private void ApplyAgentCli(AgentProfile agent)
+    {
+        var directory = string.IsNullOrWhiteSpace(agent.WorkingDirectory)
+            ? Settings.ResolveCliWorkingDirectory()
+            : agent.WorkingDirectory;
+
+        Cli.Select(agent.ProviderId, directory);
+        ApplyCliOptions();
+    }
+
+    /// <summary>Re-reads the agent list after it has been edited in settings.</summary>
+    public void ReloadAgents()
+    {
+        if (Settings.Agents.Active is { } agent) ApplyAgentCli(agent);
+        OnAgentsChanged?.Invoke();
     }
 
     // --- standby ----------------------------------------------------------

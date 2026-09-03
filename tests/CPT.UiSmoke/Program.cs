@@ -1,6 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.IO;
 using CPT.Shell;
 using CPT.Shell.Views;
 
@@ -19,18 +23,23 @@ namespace CPT.UiSmoke;
 public static class Program
 {
     [STAThread]
-    public static int Main()
+    public static int Main(string[] args)
     {
-        var application = new Application
+        var application0 = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        if (args.Length >= 2 && args[0] == "--ring")
         {
-            ShutdownMode = ShutdownMode.OnExplicitShutdown,
-            Resources = new ResourceDictionary
+            var code = RenderRing(args[1], args.Length > 2 ? double.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture) : 1.0);
+            application0.Shutdown();
+            return code;
+        }
+
+        var application = application0;
+        application.Resources = new ResourceDictionary
+        {
+            MergedDictionaries =
             {
-                MergedDictionaries =
-                {
-                    Load("Icons.xaml"),
-                    Load("Theme.xaml"),
-                },
+                Load("Icons.xaml"),
+                Load("Theme.xaml"),
             },
         };
 
@@ -63,6 +72,52 @@ public static class Program
         Console.WriteLine(failures == 0 ? "OK    every window built." : $"FAIL  {failures} did not build.");
         application.Shutdown();
         return failures == 0 ? 0 : 1;
+    }
+
+
+    /// <summary>
+    /// Renders the prismatic ring to a PNG without showing anything.
+    ///
+    /// The ring is the one piece of chrome that cannot be checked by
+    /// constructing it -- it either glows and travels round the panel or it
+    /// does not, and that is only visible in pixels.
+    /// </summary>
+    private static int RenderRing(string path, double energy)
+    {
+        const int width = 330, height = 640;
+
+        var ring = new PrismaticBorder { CornerRadius = 14, Width = width, Height = height };
+        ring.SetPalette("prismatic");
+        ring.SetLit(energy > 0);
+
+        // Drive the animation directly: CompositionTarget.Rendering never fires
+        // without a live window, so the frames are stepped by hand.
+        ring.AdvanceForTest(energy, phase: 0.0);
+
+        ring.Measure(new Size(width, height));
+        ring.Arrange(new Rect(0, 0, width, height));
+        ring.UpdateLayout();
+
+        var backdrop = new Border
+        {
+            Width = width, Height = height,
+            Background = new SolidColorBrush(Color.FromRgb(0x2B, 0x2F, 0x36)),
+            Child = ring,
+        };
+        backdrop.Measure(new Size(width, height));
+        backdrop.Arrange(new Rect(0, 0, width, height));
+        backdrop.UpdateLayout();
+
+        var bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(backdrop);
+
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var stream = File.Create(path);
+        encoder.Save(stream);
+
+        Console.WriteLine("ok    ring rendered to " + path);
+        return 0;
     }
 
     private static IEnumerable<(string Name, Func<FrameworkElement> Make)> Pages(AppServices services) =>

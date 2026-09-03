@@ -4,8 +4,10 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Controls;
 using System.Windows.Media.Animation;
 using System.Windows.Media;
+using CPT.Core.Agents;
 using CPT.Core.Cli;
 using Microsoft.Web.WebView2.Core;
 
@@ -38,6 +40,7 @@ public partial class PersonaWindow : Window
     private bool _webReady;
     private bool _micActive;
     private bool _draggingBar;
+    private bool _suppressAgentPick;
 
     public PersonaWindow() : this(null) { }
 
@@ -55,9 +58,15 @@ public partial class PersonaWindow : Window
         _services.OnPersonaAppear += _ => Dispatcher.Invoke(ShowAndAppear);
         _services.OnTranscriptChunk += chunk =>
             Dispatcher.Invoke(() => PostToWeb(new { type = "transcript_chunk", text = chunk }));
-        _services.OnAudioLevel += level => Dispatcher.Invoke(() => PostToWeb(new { type = "level", level }));
+        // BeginInvoke, not Invoke. This fires sixty times a second from the
+        // audio timer thread, and a blocking marshal at that rate stalls the
+        // audio callback behind the UI thread -- which is felt as the mouth
+        // lagging the voice, the exact symptom this signal exists to prevent.
+        _services.OnAudioLevel += level =>
+            Dispatcher.BeginInvoke(() => PostToWeb(new { type = "level", level }));
         _services.OnTranslationDone += () => Dispatcher.Invoke(BeginDematerialize);
         _services.OnAgentBusy += busy => Dispatcher.Invoke(() => ShowAgentBusy(busy));
+        _services.OnAgentsChanged += () => Dispatcher.Invoke(RefreshAgents);
         _services.OnNotification += message => Dispatcher.Invoke(() =>
         {
             Show();
@@ -73,6 +82,7 @@ public partial class PersonaWindow : Window
 
         StandbyToggle.IsChecked = _services.IsStandbyRunning;
         ShowCliStatus(_services.Cli.Status);
+        RefreshAgents();
     }
 
     /// <summary>When pinned, the hologram stays visible after a reply finishes.</summary>
@@ -160,7 +170,7 @@ public partial class PersonaWindow : Window
     /// </summary>
     private void ShowAgentBusy(bool busy)
     {
-        SetBarGlowLit(busy);
+        SetRingLit(busy);
         if (busy) { Show(); PostToWeb(new { type = "thinking" }); }
         else if (!Pinned) PostToWeb(new { type = "transcript_clear" });
     }
@@ -169,7 +179,7 @@ public partial class PersonaWindow : Window
     {
         Show();
         Activate();
-        SetBarGlowLit(true);
+        SetRingLit(true);
         PostToWeb(new { type = "appear" });
     }
 
@@ -180,7 +190,7 @@ public partial class PersonaWindow : Window
 
         await Task.Delay(450).ConfigureAwait(true);
         // The bar stays; its border and the hologram both fade.
-        SetBarGlowLit(false);
+        SetRingLit(false);
         PostToWeb(new { type = "transcript_clear" });
     }
 
@@ -190,7 +200,7 @@ public partial class PersonaWindow : Window
         var persona = _services.ActivePersona;
         HeaderName.Text = (persona.Name ?? "").ToUpperInvariant();
 
-        ApplyBarGlow(persona.Visual.HologramColor);
+        ApplyRingPalette(persona.Visual.HologramColor);
         SizeToHologram(persona.Visual.HologramScale);
 
         if (!_webReady) return;
@@ -211,71 +221,76 @@ public partial class PersonaWindow : Window
             audioOnly = false,
         });
     }
-
-    // --- the bar's glowing border -----------------------------------------
+    // --- the panel's prismatic ring ---------------------------------------
 
     /// <summary>
-    /// Lights the border around the bar in the persona's colour.
+    /// Sets the ring's palette. The projection inside the panel runs the same
+    /// palette off the same phase, so the two never disagree.
+    /// </summary>
+    private void ApplyRingPalette(string? colour) => Ring.SetPalette(colour);
+
+    /// <summary>Lights the ring for a turn, or lets it dissolve back to grey.</summary>
+    private void SetRingLit(bool lit) => Ring.SetLit(lit);
+
+    /// <summary>
+    /// Sizes the panel from the persona's setting.
     ///
-    /// The colour sweeps sideways for the same reason the projection's does: a
-    /// static gradient on a border reads as a painted stripe, and a moving one
-    /// reads as something running. The animation is on the brush's transform,
-    /// so WPF composites it rather than re-laying-out the bar every frame.
+    /// WIDTH is the control. The head fills whatever panel it is given, so the
+    /// panel's width IS the head's size -- which is why the head no longer sits
+    /// in a field of empty space. Height follows from the head's proportions so
+    /// nothing is cropped, and both are capped to the work area.
     /// </summary>
-    private void ApplyBarGlow(string? colour)
+    private void SizeToHologram(double stored)
     {
-        var sweep = PersonaPalette.CreateSweep(colour);
-        var slide = new TranslateTransform();
-        sweep.RelativeTransform = slide;
-        slide.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation
-        {
-            From = 0,
-            To = 1,
-            Duration = new Duration(TimeSpan.FromSeconds(6)),
-            RepeatBehavior = RepeatBehavior.Forever,
-        });
+        // 2.5 and above can only be a value saved under the previous meaning of
+        // this field, where it multiplied the HEAD rather than the panel. Read
+        // back as the default instead of as a window most of a screen tall.
+        var scale = stored >= 2.5 ? 1.0 : stored;
 
-        BarGlow.BorderBrush = sweep;
-        BarGlowBloom.Color = PersonaPalette.Bloom(colour);
-    }
+        // The panel width at scale 1. Half the previous default, which is what
+        // the previous default should have been.
+        const double BaseWidth = 330;
+        const double BarHeight = 96;
 
-    /// <summary>
-    /// Fades the border between its calm grey rest state and the lit one, so
-    /// the bar never looks like it is working when it is not.
-    /// </summary>
-    private void SetBarGlowLit(bool lit)
-    {
-        BarGlow.BeginAnimation(OpacityProperty, new DoubleAnimation
-        {
-            To = lit ? 1.0 : 0.0,
-            Duration = new Duration(TimeSpan.FromMilliseconds(lit ? 260 : 700)),
-            FillBehavior = FillBehavior.HoldEnd,
-        });
-    }
-
-    /// <summary>
-    /// Grows the window so the persona's chosen head size actually fits.
-    ///
-    /// The projection is sized from the panel it is drawn in, so "three times
-    /// bigger" only means anything if the panel grows with it. Capped to the
-    /// work area, because a floating window taller than the screen is worse
-    /// than a small hologram.
-    /// </summary>
-    private void SizeToHologram(double scale)
-    {
-        const double BaseHead = 188;                  // the size the projection was designed at
-        const double BarHeight = 78;
-
-        var head = BaseHead * Math.Clamp(scale, 0.5, 6);
         var work = SystemParameters.WorkArea;
-        var width = Math.Clamp(head * 1.15, 380, work.Width * 0.9);
-        var height = Math.Clamp(head * 1.35 + BarHeight, 420, work.Height * 0.92);
+        var width = Math.Clamp(BaseWidth * Math.Clamp(scale, 0.6, 2.0), 240, work.Width * 0.6);
+
+        // The head cloud is about 0.576 wide for 1.0 tall, so a panel that shows
+        // it full-width needs this much room above the bar.
+        var height = Math.Clamp(width / 0.576 * 0.96 + BarHeight, 380, work.Height * 0.92);
 
         if (Math.Abs(Width - width) < 1 && Math.Abs(Height - height) < 1) return;
 
         Width = width;
         Height = height;
         PositionBottomRight();
+    }
+
+    // --- agent picker -----------------------------------------------------
+
+    /// <summary>
+    /// Fills the bar's agent picker. Hidden entirely when no agents are
+    /// configured, so the bar does not grow a control that does nothing.
+    /// </summary>
+    private void RefreshAgents()
+    {
+        if (_services is null) return;
+
+        var agents = _services.Settings.Agents.Agents;
+        AgentPicker.Visibility = agents.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        if (agents.Count == 0) return;
+
+        _suppressAgentPick = true;
+        AgentPicker.ItemsSource = agents;
+        AgentPicker.DisplayMemberPath = nameof(AgentProfile.Name);
+        AgentPicker.SelectedItem = _services.ActiveAgent;
+        _suppressAgentPick = false;
+    }
+
+    private void OnAgentPicked(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressAgentPick || _services is null) return;
+        if (AgentPicker.SelectedItem is AgentProfile agent) _services.SetActiveAgent(agent.Id);
     }
 
     // --- status strip -----------------------------------------------------

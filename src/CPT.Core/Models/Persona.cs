@@ -47,11 +47,15 @@ public sealed class VisualConfig
     /// <summary>Persona colour, or "prismatic" for the full spectrum sweep.</summary>
     public string HologramColor { get; set; } = "prismatic";
     /// <summary>
-    /// How large the projected head is, as a multiple of the panel-relative base
-    /// size. The window grows to fit, so this is the one knob for "I cannot see
-    /// it": 1 is the size the projection was designed at, 3 is the default.
+    /// Panel size, as a multiple of the default width. The head fills whatever
+    /// panel it is given, so this is the one size control: a bigger panel is a
+    /// bigger hologram, with no empty space beside it either way.
+    ///
+    /// Values of 2.5 and above are from an older meaning of this field (a head
+    /// multiplier) and are read back as the default rather than as a window
+    /// most of a screen tall.
     /// </summary>
-    public double HologramScale { get; set; } = 3.0;
+    public double HologramScale { get; set; } = 1.0;
 
     public float GlitchIntensity { get; set; } = 0.5f;
     public string WaveformStyle { get; set; } = "bars";

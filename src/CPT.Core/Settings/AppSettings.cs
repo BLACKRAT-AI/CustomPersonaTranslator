@@ -132,6 +132,12 @@ public sealed class AppSettings
     public CliSettings Cli { get; set; } = new();
     public StandbySettings Standby { get; set; } = new();
 
+    /// <summary>
+    /// The configured agents. An agent is a CLI paired with a persona and a
+    /// phrase, so several can be addressed by voice without opening settings.
+    /// </summary>
+    public Agents.AgentBook Agents { get; set; } = new();
+
     /// <summary>Location of the settings file.</summary>
     public static string FilePath { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),

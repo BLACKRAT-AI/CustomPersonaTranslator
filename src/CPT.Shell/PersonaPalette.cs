@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+
 using System.Windows.Media;
 
 namespace CPT.Shell;
@@ -28,56 +28,29 @@ internal static class PersonaPalette
     /// <summary>Stops around the sweep. Enough to read as continuous, few enough to stay cheap.</summary>
     private const int Steps = 12;
 
+
+    /// <summary>
+    /// The colour at position <paramref name="p"/> around the sweep, with the
+    /// saturation and lightness the caller would have used for the prismatic
+    /// version. Mirrors <c>palette.js</c>'s <c>at()</c> exactly, so the ring and
+    /// the projection inside it are never running two different palettes.
+    /// </summary>
+    public static Color At(string? colour, double p, double saturation, double lightness)
+    {
+        if (IsPrismatic(colour)) return FromHsl(p, saturation, lightness);
+
+        var (hue, baseSaturation) = HueOf(colour);
+        var wave = Math.Sin(p * Math.PI * 2);
+        return FromHsl(
+            hue + wave * TintHueSpread,
+            Math.Min(1, saturation * 0.35 + baseSaturation * 0.65),
+            Math.Clamp(lightness + wave * TintLightSpread, 0.08, 0.96));
+    }
+
     /// <summary>True when the persona wants the full spectrum rather than one colour.</summary>
     public static bool IsPrismatic(string? colour) =>
         string.IsNullOrWhiteSpace(colour) || colour.Trim().Equals("prismatic", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>
-    /// A horizontal gradient that repeats, so animating it sideways sweeps the
-    /// colour along whatever it is painting.
-    /// </summary>
-    public static LinearGradientBrush CreateSweep(string? colour)
-    {
-        var brush = new LinearGradientBrush
-        {
-            StartPoint = new System.Windows.Point(0, 0),
-            EndPoint = new System.Windows.Point(0.5, 0),
-            MappingMode = BrushMappingMode.RelativeToBoundingBox,
-            SpreadMethod = GradientSpreadMethod.Repeat,
-        };
-
-        foreach (var (offset, stop) in Stops(colour))
-            brush.GradientStops.Add(new GradientStop(stop, offset));
-
-        return brush;
-    }
-
-    /// <summary>The colour to bloom around the border with — the palette's brightest point.</summary>
-    public static Color Bloom(string? colour) =>
-        IsPrismatic(colour) ? FromHsl(0.55, 0.85, 0.62) : Sweep(colour, 0.25);
-
-    private static IEnumerable<(double Offset, Color Color)> Stops(string? colour)
-    {
-        for (var i = 0; i <= Steps; i++)
-        {
-            var p = (double)i / Steps;
-            yield return (p, Sweep(colour, p));
-        }
-    }
-
-    private static Color Sweep(string? colour, double p)
-    {
-        if (IsPrismatic(colour)) return FromHsl(p, 0.85, 0.62);
-
-        var (hue, saturation) = HueOf(colour);
-        // A full turn of p sweeps once through the narrow band and back, so the
-        // colour cycles smoothly instead of jumping at the wrap point.
-        var wave = Math.Sin(p * Math.PI * 2);
-        return FromHsl(
-            hue + wave * TintHueSpread,
-            Math.Min(1, 0.30 + saturation * 0.70),
-            Math.Clamp(0.62 + wave * TintLightSpread, 0.10, 0.94));
-    }
 
     private static (double Hue, double Saturation) HueOf(string? colour)
     {

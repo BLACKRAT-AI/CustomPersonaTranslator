@@ -7,6 +7,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using CPT.Core.Agents;
 using CPT.Core.Cli;
 using CPT.Core.Diagnostics;
 using CPT.Core.Media;
@@ -51,6 +52,7 @@ public partial class SettingsWindow : Window
 
         CliOptions.ItemsSource = _optionRows;
         PersonaList.ItemsSource = _personaRows;
+        AgentList.ItemsSource = _agentRows;
         Load();
 
         Tabs.SelectedIndex = Math.Clamp(initialTab, 0, Tabs.Items.Count - 1);
@@ -96,6 +98,7 @@ public partial class SettingsWindow : Window
         // Coming back from a pane, anything it may have changed is now stale.
         LoadAgentTab();
         LoadPersonaList();
+        LoadAgents();
     }
 
     private void OnPageBack(object sender, RoutedEventArgs e)
@@ -104,6 +107,85 @@ public partial class SettingsWindow : Window
     }
 
     // --- loading ----------------------------------------------------------
+
+
+    // --- agents -----------------------------------------------------------
+
+    private readonly ObservableCollection<AgentRow> _agentRows = [];
+
+    /// <summary>
+    /// Rebuilds the agent list. Rows write straight through to the stored
+    /// profiles, so this only runs when the SET of agents changes.
+    /// </summary>
+    private void LoadAgents()
+    {
+        var providers = CliOrchestrator.AvailableProviders;
+        var personas = _services.Personas.LoadAll().ToList();
+
+        _agentRows.Clear();
+        foreach (var agent in _services.Settings.Agents.Agents)
+            _agentRows.Add(new AgentRow(agent, providers, personas));
+
+        ShowAgentStatus();
+    }
+
+    private void ShowAgentStatus()
+    {
+        var active = _services.ActiveAgent;
+        AgentStatus.Text = _agentRows.Count == 0
+            ? "No agents yet — add one to switch CLI and voice together."
+            : active is null ? "" : $"“{active.Name}” is answering.";
+    }
+
+    private void OnNewAgent(object sender, RoutedEventArgs e)
+    {
+        var personas = _services.Personas.LoadAll().ToList();
+        var agent = new AgentProfile
+        {
+            Name = "Agent " + (_services.Settings.Agents.Agents.Count + 1),
+            ProviderId = _services.Settings.Cli.ProviderId,
+            PersonaId = personas.Count > 0 ? personas[0].Id : "",
+        };
+
+        _services.Settings.Agents.Agents.Add(agent);
+        if (_services.Settings.Agents.Agents.Count == 1) _services.Settings.Agents.ActiveId = agent.Id;
+        SaveAgents();
+        LoadAgents();
+    }
+
+    private void OnDeleteAgent(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not AgentRow row) return;
+
+        _services.Settings.Agents.Agents.Remove(row.Agent);
+        if (_services.Settings.Agents.ActiveId == row.Agent.Id)
+            _services.Settings.Agents.ActiveId = "";
+
+        SaveAgents();
+        LoadAgents();
+    }
+
+    private void OnUseAgent(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not AgentRow row) return;
+
+        SaveAgents();
+        _services.SetActiveAgent(row.Agent.Id);
+        ShowAgentStatus();
+    }
+
+    /// <summary>
+    /// Persists the agent list and lets the rest of the app know.
+    ///
+    /// Called on every structural change and again when the window closes,
+    /// because the rows edit the profiles in place -- a typed phrase is already
+    /// in the model and only needs writing to disk.
+    /// </summary>
+    private void SaveAgents()
+    {
+        _services.Settings.Save();
+        _services.ReloadAgents();
+    }
 
     private void Load()
     {
@@ -426,6 +508,11 @@ public partial class SettingsWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        // Agent rows edit their profiles in place, so closing the window is the
+        // moment a typed name or phrase has to reach disk. There is no Save
+        // button on that tab and there should not be one.
+        if (_agentRows.Count > 0) SaveAgents();
+
         while (_pages.Count > 0) _pages.Pop().Teardown();
         base.OnClosed(e);
     }
