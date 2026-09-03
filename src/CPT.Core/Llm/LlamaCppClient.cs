@@ -67,14 +67,28 @@ public sealed class LlamaCppClient : IDisposable
         }
     }
 
+    /// <summary>
+    /// The rewrite task, stated after the persona's own prompt.
+    ///
+    /// Order matters with a small local model: a generated persona prompt is
+    /// usually written in the second person ("you are the ship's computer"),
+    /// which invites the model to ANSWER the text rather than restate it. The
+    /// last instruction it reads has to be the job, not the character.
+    /// </summary>
+    private const string TaskRule =
+        "TASK. The text below is an answer that has ALREADY been produced by a coding agent. " +
+        "Your only job is to say that same answer again in the persona's voice. " +
+        "Do not answer it, do not reply to it, do not ask anything back, and do not add or " +
+        "invent information. Keep every fact, number, name, file path and command exactly as " +
+        "given. If the text is a question, restate the question — do not answer it. " +
+        "Output only the restated text, with no preamble.";
+
     private static object[] BuildMessages(Persona persona, string text)
     {
-        var system = string.IsNullOrWhiteSpace(persona.SystemPrompt)
-            ? "You are a persona translator. Rewrite the user-provided text in the persona's voice. " +
-              "Preserve meaning. Output only the rewritten text, no preamble."
-            : persona.SystemPrompt;
+        var list = new List<object>();
 
-        var list = new List<object> { new { role = "system", content = system } };
+        if (!string.IsNullOrWhiteSpace(persona.SystemPrompt))
+            list.Add(new { role = "system", content = persona.SystemPrompt });
 
         if (persona.FewShotQuotes.Count > 0)
         {
@@ -84,13 +98,18 @@ public sealed class LlamaCppClient : IDisposable
             list.Add(new { role = "system", content = sb.ToString() });
         }
 
+        list.Add(new { role = "system", content = TaskRule });
+
+        // Fenced, so the model cannot read the agent's answer as something
+        // addressed to it.
         list.Add(new
         {
             role = "user",
-            content = "Rewrite the following in the persona's voice. Output only the rewrite.\n\n" + text
+            content = "<<<ANSWER\n" + text + "\nANSWER>>>\n\nSay that in the persona's voice.",
         });
         return list.ToArray();
     }
+
 
     /// <summary>Releases the HTTP client this instance owns.</summary>
     public void Dispose() => _http.Dispose();

@@ -161,6 +161,27 @@
                     </Border>
                 </Grid>
             </Border>
+
+            <!-- The glowing border, laid over the bar that was already there.
+                 It is a second Border rather than a brush on the bar itself so
+                 its opacity can be faded in and out on its own: the bar keeps
+                 its calm grey outline at rest, and only a real turn lights the
+                 colour over the top of it. -->
+            <Border x:Name="BarGlow"
+                    IsHitTestVisible="False"
+                    Background="Transparent"
+                    BorderThickness="1.6"
+                    CornerRadius="12"
+                    Margin="0,2,0,0"
+                    Opacity="0">
+                <Border.Effect>
+                    <DropShadowEffect x:Name="BarGlowBloom"
+                                      ShadowDepth="0"
+                                      BlurRadius="18"
+                                      Opacity="0.85"
+                                      Color="#6FC2D6"/>
+                </Border.Effect>
+            </Border>
         </Grid>
     </Grid>
 </Window>

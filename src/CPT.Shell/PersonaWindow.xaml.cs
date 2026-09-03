@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media.Animation;
 using System.Windows.Media;
 using CPT.Core.Cli;
 using Microsoft.Web.WebView2.Core;
@@ -158,6 +159,7 @@ public partial class PersonaWindow : Window
     /// </summary>
     private void ShowAgentBusy(bool busy)
     {
+        SetBarGlowLit(busy);
         if (busy) { Show(); PostToWeb(new { type = "thinking" }); }
         else if (!Pinned) PostToWeb(new { type = "transcript_clear" });
     }
@@ -166,6 +168,7 @@ public partial class PersonaWindow : Window
     {
         Show();
         Activate();
+        SetBarGlowLit(true);
         PostToWeb(new { type = "appear" });
     }
 
@@ -175,7 +178,8 @@ public partial class PersonaWindow : Window
         if (Pinned) return;
 
         await Task.Delay(450).ConfigureAwait(true);
-        // The bar stays; only the hologram fades.
+        // The bar stays; its border and the hologram both fade.
+        SetBarGlowLit(false);
         PostToWeb(new { type = "transcript_clear" });
     }
 
@@ -184,6 +188,9 @@ public partial class PersonaWindow : Window
         if (_services is null) return;
         var persona = _services.ActivePersona;
         HeaderName.Text = (persona.Name ?? "").ToUpperInvariant();
+
+        ApplyBarGlow(persona.Visual.HologramColor);
+        SizeToHologram(persona.Visual.HologramScale);
 
         if (!_webReady) return;
         PostToWeb(new
@@ -194,6 +201,7 @@ public partial class PersonaWindow : Window
             // persona is not limited to one flat brush.
             color = persona.Visual.HologramColor,
             glitch = persona.Visual.GlitchIntensity,
+            size = persona.Visual.HologramScale,
             transcript = persona.ShowTranscriptPanel,
             avatarVisible = AvatarVisible,
             // The compact bar owns the microphone, and a floating window has no
@@ -201,6 +209,72 @@ public partial class PersonaWindow : Window
             hideMicBar = true,
             audioOnly = false,
         });
+    }
+
+    // --- the bar's glowing border -----------------------------------------
+
+    /// <summary>
+    /// Lights the border around the bar in the persona's colour.
+    ///
+    /// The colour sweeps sideways for the same reason the projection's does: a
+    /// static gradient on a border reads as a painted stripe, and a moving one
+    /// reads as something running. The animation is on the brush's transform,
+    /// so WPF composites it rather than re-laying-out the bar every frame.
+    /// </summary>
+    private void ApplyBarGlow(string? colour)
+    {
+        var sweep = PersonaPalette.CreateSweep(colour);
+        var slide = new TranslateTransform();
+        sweep.RelativeTransform = slide;
+        slide.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation
+        {
+            From = 0,
+            To = 1,
+            Duration = new Duration(TimeSpan.FromSeconds(6)),
+            RepeatBehavior = RepeatBehavior.Forever,
+        });
+
+        BarGlow.BorderBrush = sweep;
+        BarGlowBloom.Color = PersonaPalette.Bloom(colour);
+    }
+
+    /// <summary>
+    /// Fades the border between its calm grey rest state and the lit one, so
+    /// the bar never looks like it is working when it is not.
+    /// </summary>
+    private void SetBarGlowLit(bool lit)
+    {
+        BarGlow.BeginAnimation(OpacityProperty, new DoubleAnimation
+        {
+            To = lit ? 1.0 : 0.0,
+            Duration = new Duration(TimeSpan.FromMilliseconds(lit ? 260 : 700)),
+            FillBehavior = FillBehavior.HoldEnd,
+        });
+    }
+
+    /// <summary>
+    /// Grows the window so the persona's chosen head size actually fits.
+    ///
+    /// The projection is sized from the panel it is drawn in, so "three times
+    /// bigger" only means anything if the panel grows with it. Capped to the
+    /// work area, because a floating window taller than the screen is worse
+    /// than a small hologram.
+    /// </summary>
+    private void SizeToHologram(double scale)
+    {
+        const double BaseHead = 188;                  // the size the projection was designed at
+        const double BarHeight = 78;
+
+        var head = BaseHead * Math.Clamp(scale, 0.5, 6);
+        var work = SystemParameters.WorkArea;
+        var width = Math.Clamp(head * 1.15, 380, work.Width * 0.9);
+        var height = Math.Clamp(head * 1.35 + BarHeight, 420, work.Height * 0.92);
+
+        if (Math.Abs(Width - width) < 1 && Math.Abs(Height - height) < 1) return;
+
+        Width = width;
+        Height = height;
+        PositionBottomRight();
     }
 
     // --- status strip -----------------------------------------------------

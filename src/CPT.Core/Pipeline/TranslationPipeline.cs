@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -74,6 +75,33 @@ public sealed class TranslationPipeline : IDisposable
         var sentenceBuf = new StringBuilder();
         try
         {
+            // A short answer -- which is nearly every spoken agent reply -- is
+            // rewritten in full and CHECKED before any of it is spoken. The
+            // rewrite is worth nothing if it dropped the answer, and by the time
+            // a streamed sentence has been synthesised it is too late to tell.
+            // Long output still streams: waiting on a whole essay before the
+            // first word would be worse than the risk.
+            if (spoken.Length <= VerifyRewriteMaxChars)
+            {
+                var rewrite = new StringBuilder();
+                await foreach (var token in _llm.StreamRewriteAsync(persona, spoken, ct))
+                    rewrite.Append(token);
+
+                var text = rewrite.ToString().Trim();
+                if (!PersonaRewrite.KeepsSubstance(spoken, text))
+                {
+                    OnEngineFallback?.Invoke("The persona rewrite lost the answer — speaking it plainly.");
+                    text = spoken;
+                }
+
+                foreach (var sentence in SplitForSpeech(text))
+                {
+                    OnSpokenChunk?.Invoke(sentence);
+                    await SpeakAsync(sentence, persona, ct);
+                }
+            }
+            else
+            {
             await foreach (var token in _llm.StreamRewriteAsync(persona, spoken, ct))
             {
                 sentenceBuf.Append(token);
@@ -93,6 +121,8 @@ public sealed class TranslationPipeline : IDisposable
             }
             if (sentenceBuf.Length > 0)
                 await SpeakAsync(sentenceBuf.ToString(), persona, ct);
+            }
+
 
             // Wait for the audio buffer to fully play before signalling done —
             // otherwise the hologram's dematerialize starts while the last
@@ -154,6 +184,44 @@ public sealed class TranslationPipeline : IDisposable
             await foreach (var pcm in _tts.SynthesizeStreamAsync(text, persona.Voice.VoiceRef, ct))
                 _player.Write(pcm);
         }
+    }
+
+    /// <summary>
+    /// How long an answer can be and still be rewritten in full before any of
+    /// it is spoken. Nearly every spoken agent reply is well under this.
+    /// </summary>
+    private const int VerifyRewriteMaxChars = 900;
+
+    /// <summary>
+    /// Breaks text into synthesis-sized pieces at sentence ends, keeping each
+    /// piece at least 60 characters. Short fragments are the reason Chatterbox
+    /// used to clip the final phoneme of a reply.
+    /// </summary>
+    internal static IReadOnlyList<string> SplitForSpeech(string text)
+    {
+        var parts = new List<string>();
+        var buffer = new StringBuilder();
+
+        foreach (var ch in text)
+        {
+            buffer.Append(ch);
+            if ((ch is '.' or '!' or '?' or '\n') && buffer.Length >= 60)
+            {
+                parts.Add(buffer.ToString());
+                buffer.Clear();
+            }
+        }
+
+        var tail = buffer.ToString();
+        if (tail.Trim().Length > 0)
+        {
+            // A short tail joins the previous piece rather than becoming its own
+            // clipped little synth.
+            if (parts.Count > 0 && tail.Trim().Length < 60) parts[^1] += tail;
+            else parts.Add(tail);
+        }
+
+        return parts.Count == 0 ? [text] : parts;
     }
 
     private static bool HasSentenceEnd(string s)

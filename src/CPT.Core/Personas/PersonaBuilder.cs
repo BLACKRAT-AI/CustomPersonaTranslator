@@ -102,6 +102,7 @@ public sealed class PersonaBuilder
             {
                 ImageFile = req.ImageFile,
                 HologramColor = req.HologramColor,
+                HologramScale = req.HologramScale,
                 GlitchIntensity = 0.5f,
             },
             IoProviders = req.IoProviders.Count == 0 ? new() { "local" } : req.IoProviders,
@@ -169,7 +170,10 @@ public sealed class PersonaBuildRequest
     public string VoiceEngine { get; set; } = "piper";
     public string VoiceRef { get; set; } = "en_US-amy-medium";
     public string? ImageFile { get; set; }
-    public string HologramColor { get; set; } = "#22d3ee";
+    public string HologramColor { get; set; } = "prismatic";
+
+    /// <summary>Head size multiplier; see <see cref="VisualConfig.HologramScale"/>.</summary>
+    public double HologramScale { get; set; } = 3.0;
     public List<string> IoProviders { get; set; } = new() { "local" };
     public bool ShowTranscriptPanel { get; set; }
 

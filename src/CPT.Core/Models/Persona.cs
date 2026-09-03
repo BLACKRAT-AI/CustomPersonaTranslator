@@ -46,6 +46,13 @@ public sealed class VisualConfig
     public string? ImageFile { get; set; }
     /// <summary>Persona colour, or "prismatic" for the full spectrum sweep.</summary>
     public string HologramColor { get; set; } = "prismatic";
+    /// <summary>
+    /// How large the projected head is, as a multiple of the panel-relative base
+    /// size. The window grows to fit, so this is the one knob for "I cannot see
+    /// it": 1 is the size the projection was designed at, 3 is the default.
+    /// </summary>
+    public double HologramScale { get; set; } = 3.0;
+
     public float GlitchIntensity { get; set; } = 0.5f;
     public string WaveformStyle { get; set; } = "bars";
     public string IdleAnimation { get; set; } = "breathe";

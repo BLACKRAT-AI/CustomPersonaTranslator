@@ -2,9 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Media;
 using CPT.Core.Models;
 using CPT.Core.Personas;
 using CPT.Core.Research;
@@ -41,6 +43,7 @@ public sealed partial class PersonaEditorView : SettingsPage
         VoiceCombo.SelectedIndex = 0;
 
         RefreshCloneAvailabilityUi();
+        LoadHologramLook(existing);
         if (existing != null) LoadExisting(existing);
         else if (_services.CloningAvailable)
         {
@@ -63,7 +66,7 @@ public sealed partial class PersonaEditorView : SettingsPage
         TextSamplesBox.Text = string.Join("\n\n", p.FewShotQuotes);
         VoiceFileBox.Text = p.Voice.VoiceSampleFile ?? "";
         ImageFileBox.Text = p.Visual.ImageFile ?? "";
-        ColorBox.Text = p.Visual.HologramColor;
+
         IoLocal.IsChecked         = p.IoProviders.Contains("local");
         IoDiscordVoice.IsChecked  = p.IoProviders.Contains("discord-voice");
         IoDiscordText.IsChecked   = p.IoProviders.Contains("discord-text");
@@ -81,6 +84,91 @@ public sealed partial class PersonaEditorView : SettingsPage
     }
 
     private void OnModeChanged(object sender, RoutedEventArgs e) => ApplyModeUi();
+
+    // --- hologram look ----------------------------------------------------
+
+    /// <summary>One entry in the colour picker.</summary>
+    public sealed record HologramColorOption(string Name, string Value, Brush Swatch);
+
+    /// <summary>
+    /// The colours offered by name. Prismatic is first because it is the
+    /// default and the one the projection was designed around; Custom is last
+    /// and reveals the hex box rather than making everyone type a colour.
+    /// </summary>
+    private static readonly HologramColorOption[] ColorOptions =
+    [
+        new("Prismatic", "prismatic", PrismaticSwatch()),
+        new("Cyan", "#6FC2D6", Solid("#6FC2D6")),
+        new("Ice blue", "#7FA9FF", Solid("#7FA9FF")),
+        new("Violet", "#B388FF", Solid("#B388FF")),
+        new("Magenta", "#FF7AC6", Solid("#FF7AC6")),
+        new("Amber", "#E0A03C", Solid("#E0A03C")),
+        new("Green", "#63D68A", Solid("#63D68A")),
+        new("Red alert", "#E05C5C", Solid("#E05C5C")),
+        new("Custom…", "custom", Solid("#8A8A8A")),
+    ];
+
+    private static SolidColorBrush Solid(string hex)
+    {
+        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+        brush.Freeze();
+        return brush;
+    }
+
+    private static LinearGradientBrush PrismaticSwatch()
+    {
+        var brush = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+        foreach (var hex in new[] { "#FF5F6D", "#FFC371", "#63D68A", "#6FC2D6", "#B388FF" })
+            brush.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString(hex),
+                brush.GradientStops.Count / 4.0));
+        brush.Freeze();
+        return brush;
+    }
+
+    private void LoadHologramLook(Persona? persona)
+    {
+        ColorCombo.ItemsSource = ColorOptions;
+
+        var stored = persona?.Visual.HologramColor ?? "prismatic";
+        var match = Array.Find(ColorOptions,
+            o => string.Equals(o.Value, stored, StringComparison.OrdinalIgnoreCase));
+
+        // A colour that is not one of the named ones is still a valid colour --
+        // it just came from an older persona or a hand-edited file, so it opens
+        // on Custom with the hex already filled in rather than being lost.
+        ColorCombo.SelectedItem = match ?? ColorOptions[^1];
+        if (match is null) ColorBox.Text = stored;
+
+        SizeSlider.Value = Math.Clamp(persona?.Visual.HologramScale ?? 3.0, 1, 6);
+        ShowSizeValue();
+    }
+
+    private void OnHologramColorChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (CustomColorRow is null) return;
+        CustomColorRow.Visibility = SelectedColorValue() == "custom" ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnHologramSizeChanged(object sender, RoutedPropertyChangedEventArgs<double> e) => ShowSizeValue();
+
+    private void ShowSizeValue()
+    {
+        if (SizeValue is null) return;
+        SizeValue.Text = SizeSlider.Value.ToString("0.#", CultureInfo.InvariantCulture) + "×";
+    }
+
+    private string? SelectedColorValue() => (ColorCombo.SelectedItem as HologramColorOption)?.Value;
+
+    /// <summary>The colour to save: the named choice, or whatever Custom holds.</summary>
+    private string ChosenHologramColor()
+    {
+        var selected = SelectedColorValue();
+        if (selected is null) return "prismatic";
+        if (selected != "custom") return selected;
+        var custom = ColorBox.Text?.Trim();
+        return string.IsNullOrWhiteSpace(custom) ? "prismatic" : custom;
+    }
+
 
     private void RefreshCloneAvailabilityUi()
     {
@@ -371,7 +459,8 @@ public sealed partial class PersonaEditorView : SettingsPage
                 VoiceEngine = useClone ? "chatterbox" : "piper",
                 VoiceRef = voiceId,
                 ImageFile = string.IsNullOrWhiteSpace(ImageFileBox.Text) ? null : ImageFileBox.Text,
-                HologramColor = string.IsNullOrWhiteSpace(ColorBox.Text) ? "prismatic" : ColorBox.Text!.Trim(),
+                HologramColor = ChosenHologramColor(),
+                HologramScale = SizeSlider.Value,
                 IoProviders = BuildIoProviders(),
                 ShowTranscriptPanel = TranscriptPanel.IsChecked == true,
 

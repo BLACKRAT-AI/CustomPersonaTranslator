@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using CPT.Core.Models;
+using CPT.Core.Diagnostics;
 
 namespace CPT.Core.Ipc;
 
@@ -31,25 +32,40 @@ public sealed class IpcServer : IDisposable
         _port = port;
     }
 
+    /// <summary>
+    /// Binds the local adapter channel, walking ports if something already holds
+    /// one.
+    ///
+    /// Failing to bind is NOT fatal and never throws. The IPC channel only
+    /// serves editor adapters; the app's own microphone, agent and voice all
+    /// work without it. Throwing here took the entire application down whenever
+    /// a stale HTTP.SYS registration or a second copy held the port -- a whole
+    /// app lost to an optional feature.
+    /// </summary>
     public void Start()
     {
-        // Walk ports until we find one that isn't already held by a previous
-        // CPT.Shell instance (or anything else). HttpListenerException 183 is
-        // "registration conflict" — meaning HTTP.SYS already has this prefix
-        // bound, which happens commonly when an earlier crash didn't clean up.
         const int maxAttempts = 8;
-        for (int attempt = 0; attempt < maxAttempts; attempt++)
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
         {
-            _listener.Prefixes.Clear();
-            _listener.Prefixes.Add($"http://127.0.0.1:{_port}/");
-            try { _listener.Start(); break; }
-            catch (HttpListenerException ex) when (ex.ErrorCode == 183 || ex.ErrorCode == 32)
+            try
             {
-                if (attempt == maxAttempts - 1) throw;
+                if (_listener.IsListening) return;
+                _listener.Prefixes.Clear();
+                _listener.Prefixes.Add($"http://127.0.0.1:{_port}/");
+                _listener.Start();
+                _ = Task.Run(AcceptLoopAsync);
+                return;
+            }
+            catch (Exception ex) when (ex is HttpListenerException or ObjectDisposedException)
+            {
+                // A disposed listener can never be started again, so there is
+                // nothing to retry -- only a busy port is worth another port.
+                if (ex is ObjectDisposedException) break;
                 _port++;
             }
         }
-        _ = Task.Run(AcceptLoopAsync);
+
+        CptLog.Write($"[ipc] could not bind a local port near {_port}; adapters are unavailable this session.");
     }
 
     private async Task AcceptLoopAsync()

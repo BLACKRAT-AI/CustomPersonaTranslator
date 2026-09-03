@@ -9,18 +9,15 @@
     background: transparent; overflow: hidden;
     font-family: 'Segoe UI', system-ui, sans-serif; color: #eaeaea;
   }
-  /* Two stacked canvases: the border and spinner underneath, the projected head
-     on top. Separating them lets the border run at a capped frame rate while the
-     head stays at full rate for the lip-sync. */
+  /* One canvas, fully transparent. The glowing border belongs to the bar below
+     this window, which WPF draws -- nothing here paints a panel of its own. */
   #stage { position: relative; height: 100vh; }
-  #stage > canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-  #glow { z-index: 0; }
-  #holo { z-index: 1; }
+  #holo { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 
   #toast {
-    position: absolute; left: 10px; right: 10px; bottom: 8px; z-index: 2;
+    position: absolute; left: 10px; right: 10px; bottom: 8px;
     padding: 7px 10px; border-radius: 7px;
-    background: rgba(20,20,20,0.88); border: 1px solid #3a3a3a;
+    background: rgba(12,14,18,0.92); border: 1px solid #3a3a3a;
     font-size: 11px; line-height: 1.35; color: #cfcfcf;
     opacity: 0; transition: opacity 200ms ease;
     pointer-events: none;
@@ -30,7 +27,6 @@
 </head>
 <body>
   <div id="stage">
-    <canvas id="glow"></canvas>
     <canvas id="holo"></canvas>
     <div id="toast"></div>
   </div>
@@ -40,13 +36,13 @@ import { Hologram } from './hologram.js';
 import { Prismatic } from './prismatic.js';
 
 const hologram = new Hologram(document.getElementById('holo'));
-const glow = new Prismatic(document.getElementById('glow'));
+const clock = new Prismatic();
 const toast = document.getElementById('toast');
 
-// The border owns the phase and the spinner's geometry; the hologram reads both
-// so the projection leaves the ring in step with the colours running round it.
-hologram.ring = glow;
-glow.start();
+// One clock for the colour sweep, shared with the bar's border, so the head and
+// the border are never running off two different phases.
+hologram.ring = clock;
+clock.start();
 hologram.start();
 
 let toastTimer = 0;
@@ -59,16 +55,17 @@ function showToast(text) {
 
 function setState(state) {
   hologram.setState(state);
-  glow.setState(state === 'speaking' ? 'speaking' : state === 'thinking' ? 'busy' : 'idle');
+  clock.setState(state === 'speaking' ? 'speaking' : state === 'thinking' ? 'busy' : 'idle');
 }
 
 function apply(message) {
   switch (message.type) {
     case 'persona':
       // "prismatic" (or nothing) gives the full spectrum; a persona's own colour
-      // is tinted around itself so the spinner and border still read as moving.
+      // is swept around itself so the projection still reads as moving.
       hologram.setPalette(message.color);
-      glow.setPalette(message.color);
+      clock.setPalette(message.color);
+      if (message.size) hologram.setHeadScale(message.size);
       break;
 
     case 'appear':
@@ -82,8 +79,8 @@ function apply(message) {
       hologram.setMouth(Number(message.level) || 0);
       break;
 
-    // A chunk of the reply arriving is a word boundary — pulse the mouth so it
-    // still moves if the audio level is unavailable.
+    // A chunk of the reply arriving is a word boundary. It only moves the mouth
+    // when no real audio level is arriving -- see mouthHit.
     case 'transcript_chunk':
       hologram.mouthHit(0.5);
       break;
@@ -114,7 +111,7 @@ window.chrome.webview.addEventListener('message', (event) => {
   if (message && message.type) apply(message);
 });
 
-window.addEventListener('resize', () => { hologram.relayout(); glow.start(); });
+window.addEventListener('resize', () => hologram.relayout());
 
 window.chrome.webview.postMessage(JSON.stringify({ type: 'ready' }));
 </script>

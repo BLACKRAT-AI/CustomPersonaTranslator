@@ -84,6 +84,58 @@
                     </StackPanel>
                 </Border>
 
+
+                <!-- Hologram. Out of Advanced on purpose: colour and size are
+                     what the persona LOOKS like, which is a main choice, not a
+                     detail buried behind an expander. -->
+                <TextBlock Text="HOLOGRAM" Style="{StaticResource Caption}" Margin="0,18,0,4"/>
+                <Border Padding="14,12"
+                        CornerRadius="8"
+                        Background="#FF1E1E1E"
+                        BorderBrush="{StaticResource BorderBr}"
+                        BorderThickness="1">
+                    <StackPanel>
+                        <DockPanel LastChildFill="True">
+                            <TextBlock Text="Colour" Width="70" VerticalAlignment="Center"
+                                       Foreground="{StaticResource Muted}" FontSize="12"/>
+                            <ComboBox x:Name="ColorCombo"
+                                      SelectionChanged="OnHologramColorChanged"
+                                      ToolTip="Prismatic runs the full spectrum; any other colour is swept around itself so movement still reads">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal">
+                                            <Border Width="14" Height="14" CornerRadius="7" Margin="0,0,8,0"
+                                                    Background="{Binding Swatch}"/>
+                                            <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </DockPanel>
+
+                        <DockPanel x:Name="CustomColorRow" LastChildFill="True" Margin="0,8,0,0" Visibility="Collapsed">
+                            <TextBlock Text="Hex" Width="70" VerticalAlignment="Center"
+                                       Foreground="{StaticResource Muted}" FontSize="12"/>
+                            <TextBox x:Name="ColorBox" Text="#6FC2D6"/>
+                        </DockPanel>
+
+                        <DockPanel LastChildFill="True" Margin="0,12,0,0">
+                            <TextBlock Text="Size" Width="70" VerticalAlignment="Center"
+                                       Foreground="{StaticResource Muted}" FontSize="12"/>
+                            <TextBlock x:Name="SizeValue" DockPanel.Dock="Right" Width="42"
+                                       TextAlignment="Right" VerticalAlignment="Center"
+                                       Foreground="{StaticResource Text}" FontSize="12"/>
+                            <Slider x:Name="SizeSlider"
+                                    Minimum="1" Maximum="6" Value="3"
+                                    TickFrequency="0.5" IsSnapToTickEnabled="True"
+                                    ValueChanged="OnHologramSizeChanged"
+                                    ToolTip="How large the projected head is. The window grows to fit it."/>
+                        </DockPanel>
+                        <TextBlock Style="{StaticResource Hint}" Margin="72,4,0,0">
+                            The window resizes to fit the head.
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
                 <!-- Big create button -->
                 <Button Style="{StaticResource PrimaryButton}"
                         x:Name="CreateBtn"
@@ -139,12 +191,6 @@
                             <Button DockPanel.Dock="Right" Content="Browse…" Click="OnPickImage"/>
                             <TextBox x:Name="ImageFileBox"/>
                         </DockPanel>
-
-                        <TextBlock Text="HOLOGRAM COLOR" Style="{StaticResource Caption}"/>
-                        <TextBox x:Name="ColorBox" Text="prismatic"/>
-                        <TextBlock Style="{StaticResource Hint}" Margin="2,4,0,0">
-                            "prismatic" for the full spectrum, or a hex colour such as #6FC2D6.
-                        </TextBlock>
 
                         <TextBlock Text="IO PROVIDERS" Style="{StaticResource Caption}"/>
                         <StackPanel Orientation="Horizontal">
