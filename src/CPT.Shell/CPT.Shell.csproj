@@ -41,6 +41,12 @@
     <Content Include="..\..\src\CPT.PlayerWeb\**\*.*" Link="PlayerWeb\%(RecursiveDir)%(Filename)%(Extension)">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <!-- The clone server. It ships as a source file that the bootstrap copies
+         into tools\voiceclone, and it silently drifted from this repo because
+         nothing in the build carried it. Now it does. -->
+    <Content Include="..\..\tools\voiceclone\*.py" Link="tools\voiceclone\%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
 </Project>

@@ -118,23 +118,6 @@
                                        Foreground="{StaticResource Muted}" FontSize="12"/>
                             <TextBox x:Name="ColorBox" Text="#6FC2D6"/>
                         </DockPanel>
-
-                        <DockPanel LastChildFill="True" Margin="0,12,0,0">
-                            <TextBlock Text="Size" Width="70" VerticalAlignment="Center"
-                                       Foreground="{StaticResource Muted}" FontSize="12"/>
-                            <TextBlock x:Name="SizeValue" DockPanel.Dock="Right" Width="42"
-                                       TextAlignment="Right" VerticalAlignment="Center"
-                                       Foreground="{StaticResource Text}" FontSize="12"/>
-                            <Slider x:Name="SizeSlider"
-                                    Minimum="0.6" Maximum="2" Value="1"
-                                    SmallChange="0.1" LargeChange="0.2"
-                                    TickFrequency="0.1" IsSnapToTickEnabled="True"
-                                    ValueChanged="OnHologramSizeChanged"
-                                    ToolTip="How wide the panel is. The hologram fills it, so this is its size too."/>
-                        </DockPanel>
-                        <TextBlock Style="{StaticResource Hint}" Margin="72,4,0,0">
-                            The panel resizes, and the hologram fills it.
-                        </TextBlock>
                     </StackPanel>
                 </Border>
                 <!-- Big create button -->

@@ -99,6 +99,19 @@ public sealed class CliOrchestrator : IDisposable
             _ = RefreshAsync();
     }
 
+
+    /// <summary>
+    /// Updates the selected CLI and re-probes it.
+    /// </summary>
+    public async Task<string?> UpdateAsync(
+        IProgress<string>? progress = null, CancellationToken cancellationToken = default)
+    {
+        var failure = await CliInstaller.UpdateAsync(_provider, progress, cancellationToken).ConfigureAwait(false);
+        _agent = null;                                  // rebuilt against the new binary
+        await RefreshAsync(cancellationToken).ConfigureAwait(false);
+        return failure;
+    }
+
     /// <summary>Re-probes the selected provider and publishes the result.</summary>
     public async Task<CliStatus> RefreshAsync(CancellationToken cancellationToken = default)
     {

@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -139,23 +138,13 @@ public sealed partial class PersonaEditorView : SettingsPage
         ColorCombo.SelectedItem = match ?? ColorOptions[^1];
         if (match is null) ColorBox.Text = stored;
 
-        var storedScale = persona?.Visual.HologramScale ?? 1.0;
-        SizeSlider.Value = Math.Clamp(storedScale >= 2.5 ? 1.0 : storedScale, 0.6, 2.0);
-        ShowSizeValue();
+
     }
 
     private void OnHologramColorChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         if (CustomColorRow is null) return;
         CustomColorRow.Visibility = SelectedColorValue() == "custom" ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    private void OnHologramSizeChanged(object sender, RoutedPropertyChangedEventArgs<double> e) => ShowSizeValue();
-
-    private void ShowSizeValue()
-    {
-        if (SizeValue is null) return;
-        SizeValue.Text = SizeSlider.Value.ToString("0.#", CultureInfo.InvariantCulture) + "×";
     }
 
     private string? SelectedColorValue() => (ColorCombo.SelectedItem as HologramColorOption)?.Value;
@@ -461,7 +450,6 @@ public sealed partial class PersonaEditorView : SettingsPage
                 VoiceRef = voiceId,
                 ImageFile = string.IsNullOrWhiteSpace(ImageFileBox.Text) ? null : ImageFileBox.Text,
                 HologramColor = ChosenHologramColor(),
-                HologramScale = SizeSlider.Value,
                 IoProviders = BuildIoProviders(),
                 ShowTranscriptPanel = TranscriptPanel.IsChecked == true,
 

@@ -13,42 +13,36 @@
         Topmost="True"
         ShowInTaskbar="False"
         WindowStartupLocation="Manual">
+    <!-- NO panel. The hologram is projected onto nothing, exactly as SYNTAX
+         does it: a transparent canvas, with a soft dark radial drawn only
+         behind the head so the dots have contrast. A panel behind it clipped
+         that radial and put a slab of glass on the screen.
 
-    <!-- ONE panel: the projection and the controls under it are a single modal,
-         with the prismatic ring tracing its whole perimeter. The panel is inset
-         a few pixels from the window edge so the ring's bloom has somewhere to
-         fall, and the WebView is inset inside that so it cannot paint over the
-         ring (a WebView2 is a child HWND and always wins against WPF). -->
-    <Grid x:Name="Root" Margin="10">
-        <Border x:Name="Panel"
-                Background="#E60D0F13"
-                CornerRadius="14"
-                ClipToBounds="True">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="*"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
+         The modal is the bar at the bottom, and the prismatic ring traces THAT.
+         The WebView2 is a child HWND that always paints over WPF, so the ring
+         lives in the bar's own row where the WebView cannot cover it. -->
+    <Grid x:Name="Root">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
 
-                <!-- ============== HOLOGRAM ZONE ============== -->
-                <Grid Grid.Row="0" x:Name="HoloZone" ClipToBounds="True" Margin="2,2,2,0">
-                    <wv2:WebView2 x:Name="Web"/>
-                </Grid>
+        <!-- ============== HOLOGRAM ZONE ============== -->
+        <Grid Grid.Row="0" x:Name="HoloZone" ClipToBounds="True">
+            <wv2:WebView2 x:Name="Web"/>
+        </Grid>
 
-                <!-- ============== PROJECTOR BAR ============== -->
-                <Grid Grid.Row="1">
-                    <!-- Part of the panel now, not a card floating on top of it:
-                         no border, no corners of its own, just a hairline to
-                         separate the controls from the projection above. -->
-                    <Border x:Name="Bar"
-                            Background="#26FFFFFF"
-                            BorderBrush="#22FFFFFF"
-                            BorderThickness="0,1,0,0"
-                            MouseLeftButtonDown="OnBarDragStart"
-                            Cursor="SizeAll">
-                        <Grid Margin="6,5">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
+        <!-- ============== PROJECTOR BAR ============== -->
+        <Grid Grid.Row="1" Margin="8,0,8,8">
+            <Border x:Name="Bar"
+                    Background="#F2141619"
+                    BorderBrush="#FF33363D"
+                    BorderThickness="1"
+                    CornerRadius="14"
+                    MouseLeftButtonDown="OnBarDragStart"
+                    Cursor="SizeAll">
+                <Grid Margin="6,5">
+                    <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
@@ -141,21 +135,9 @@
                                     </Grid>
                                 </Border>
                             </DockPanel>
-        
-                            <!-- Row 1: which agent is answering. Switching here is the
-                                 manual alternative to speaking an agent's phrase. -->
-                            <DockPanel Grid.Row="1" Margin="2,5,2,0" LastChildFill="True">
-                                <TextBlock DockPanel.Dock="Left" Text="AGENT"
-                                           Foreground="#FF7A7A7A" FontSize="9" FontWeight="SemiBold"
-                                           VerticalAlignment="Center" Margin="2,0,8,0"/>
-                                <ComboBox x:Name="AgentPicker"
-                                          SelectionChanged="OnAgentPicked"
-                                          AutomationProperties.Name="Active agent"
-                                          ToolTip="Which agent answers -- a CLI paired with a persona"/>
-                            </DockPanel>
 
-                            <!-- Row 2: which CLI is linked, and what it is doing. -->
-                            <Border Grid.Row="2"
+                            <!-- Row 1: which CLI is linked, and what it is doing. -->
+                            <Border Grid.Row="1"
                                     x:Name="CliStrip"
                                     Margin="2,5,2,0"
                                     Padding="8,4"
@@ -181,13 +163,11 @@
                             </Border>
                         </Grid>
                     </Border>
-                </Grid>
-            </Grid>
-        </Border>
 
-        <!-- SYNTAX's prismatic ring, tracing the panel's whole perimeter.
-             Last in the Grid so it is on top of the panel, and outside the
-             panel's clip so its bloom can spill into the window's margin. -->
-        <local:PrismaticBorder x:Name="Ring" CornerRadius="14"/>
+            <!-- SYNTAX's prismatic ring, tracing the bar's perimeter. Drawn
+                 last so it sits above the bar, and given the same corner radius
+                 so it follows the bar exactly rather than boxing it. -->
+            <local:PrismaticBorder x:Name="Ring" CornerRadius="14"/>
+        </Grid>
     </Grid>
 </Window>

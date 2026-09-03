@@ -46,17 +46,6 @@ public sealed class VisualConfig
     public string? ImageFile { get; set; }
     /// <summary>Persona colour, or "prismatic" for the full spectrum sweep.</summary>
     public string HologramColor { get; set; } = "prismatic";
-    /// <summary>
-    /// Panel size, as a multiple of the default width. The head fills whatever
-    /// panel it is given, so this is the one size control: a bigger panel is a
-    /// bigger hologram, with no empty space beside it either way.
-    ///
-    /// Values of 2.5 and above are from an older meaning of this field (a head
-    /// multiplier) and are read back as the default rather than as a window
-    /// most of a screen tall.
-    /// </summary>
-    public double HologramScale { get; set; } = 1.0;
-
     public float GlitchIntensity { get; set; } = 0.5f;
     public string WaveformStyle { get; set; } = "bars";
     public string IdleAnimation { get; set; } = "breathe";

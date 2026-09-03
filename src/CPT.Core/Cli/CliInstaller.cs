@@ -83,6 +83,61 @@ public static class CliInstaller
                 : "Node.js is required. Install Node.js 20 or newer, then try again.");
     }
 
+
+    /// <summary>
+    /// Updates an already-installed CLI to the latest published version.
+    ///
+    /// Installing and updating are different problems and only the first was
+    /// handled: a CLI that was present but too old to run just failed every
+    /// turn with its own "out of date" message and nothing offered to fix it.
+    /// </summary>
+    public static async Task<string?> UpdateAsync(
+        CliProvider provider,
+        IProgress<string>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (provider.Install.NpmPackage is not { Length: > 0 } package)
+            return $"{provider.DisplayName} has no automatic update channel. See {provider.Install.ManualUrl}";
+
+        if (!ExecutableResolver.Exists("npm"))
+            return "npm was not found, so the CLI cannot be updated automatically.";
+
+        progress?.Report($"Updating {provider.DisplayName}...");
+        CptLog.Write($"[cli] updating {provider.Id} to the latest published version");
+
+        var failure = await RunInstallCommandAsync(
+            "npm",
+            ["install", "--global", "--no-fund", "--no-audit", package + "@latest"],
+            progress,
+            cancellationToken).ConfigureAwait(false);
+
+        if (failure is null) progress?.Report($"{provider.DisplayName} updated.");
+        else CptLog.Write($"[cli] update of {provider.Id} failed: {failure}");
+        return failure;
+    }
+
+    /// <summary>
+    /// True when a failed turn is the CLI telling us it is too old to run.
+    ///
+    /// The wording differs between vendors and changes between releases, so
+    /// this looks for the shape of the message rather than an exact string.
+    /// </summary>
+    public static bool LooksOutOfDate(string? failure)
+    {
+        if (string.IsNullOrWhiteSpace(failure)) return false;
+
+        var text = failure.ToLowerInvariant();
+        return text.Contains("out of date")
+            || text.Contains("out-of-date")
+            || text.Contains("no longer supported")
+            || text.Contains("unsupported version")
+            || text.Contains("please update")
+            || text.Contains("please upgrade")
+            || text.Contains("update required")
+            || text.Contains("requires an update")
+            || (text.Contains("version") && text.Contains("too old"));
+    }
+
     /// <summary>Returns an error description, or null on success.</summary>
     private static async Task<string?> RunInstallCommandAsync(
         string command,

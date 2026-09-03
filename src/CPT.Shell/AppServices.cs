@@ -215,6 +215,33 @@ public sealed class AppServices : IDisposable
             CptLog.Write($"[cli] turn returned {answer.Length} chars"
                 + (failure is null ? "" : " (error: " + failure + ")"));
 
+            // The CLI refusing to run because it is too old is a fixable
+            // failure, and the app used to just report its complaint verbatim
+            // with no way to act on it. Update once per session and retry.
+            if (answer.Length == 0 && !_cliUpdateAttempted
+                && (CliInstaller.LooksOutOfDate(failure) || CliInstaller.LooksOutOfDate(answer)))
+            {
+                _cliUpdateAttempted = true;
+                OnNotification?.Invoke($"{Cli.Provider.DisplayName} is out of date — updating it now.");
+
+                var updateFailure = await Cli.UpdateAsync(
+                    new Progress<string>(line => CptLog.Write("[cli] " + line)), cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (updateFailure is not null)
+                {
+                    OnNotification?.Invoke("Could not update automatically: " + updateFailure);
+                }
+                else
+                {
+                    OnNotification?.Invoke($"{Cli.Provider.DisplayName} updated. Retrying.");
+                    _agentTurnLock.Release();
+                    try { await AskAgentAsync(request, cancellationToken).ConfigureAwait(false); }
+                    finally { await _agentTurnLock.WaitAsync(CancellationToken.None).ConfigureAwait(false); }
+                    return;
+                }
+            }
+
             if (answer.Length > 0)
             {
                 await SpeakInPersonaAsync(answer, cancellationToken).ConfigureAwait(false);
@@ -396,6 +423,9 @@ public sealed class AppServices : IDisposable
     }
 
     // --- standby ----------------------------------------------------------
+
+    /// <summary>One automatic CLI update per session, so a real failure cannot loop.</summary>
+    private bool _cliUpdateAttempted;
 
     private StandbyListener? _standby;
 

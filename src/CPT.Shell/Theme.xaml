@@ -14,7 +14,10 @@
     <Color x:Key="MutedColor">#FF8C8C8C</Color>
     <Color x:Key="LinkColor">#FFCFCFCF</Color>
     <Color x:Key="LinkHovColor">#FFFFFFFF</Color>
-    <Color x:Key="AccentColor">#FF6FC2D6</Color>
+    <!-- Selection and emphasis are neutral. A coloured accent competed with the
+         persona colour, which is the only thing in this app allowed to be a
+         colour, and made every list look tinted. -->
+    <Color x:Key="AccentColor">#FFD2D6DC</Color>
 
     <SolidColorBrush x:Key="Bg" Color="{StaticResource BgColor}"/>
     <SolidColorBrush x:Key="SurfaceHi" Color="{StaticResource SurfaceHiColor}"/>
@@ -107,7 +110,7 @@
                             <Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfaceHov}"/>
                         </Trigger>
                         <Trigger Property="IsSelected" Value="True">
-                            <Setter TargetName="Bd" Property="Background" Value="#332CB5D0"/>
+                            <Setter TargetName="Bd" Property="Background" Value="#1FFFFFFF"/>
                             <Setter Property="Foreground" Value="{StaticResource Accent}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
@@ -237,7 +240,7 @@
                             <Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfaceHov}"/>
                         </Trigger>
                         <Trigger Property="IsSelected" Value="True">
-                            <Setter TargetName="Bd" Property="Background" Value="#332CB5D0"/>
+                            <Setter TargetName="Bd" Property="Background" Value="#1FFFFFFF"/>
                             <Setter Property="Foreground" Value="{StaticResource Accent}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
@@ -388,7 +391,7 @@
     <!-- The one action a panel wants you to take, without the size of a
          full-width call to action. -->
     <Style x:Key="AccentButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-        <Setter Property="Background" Value="#332CB5D0"/>
+        <Setter Property="Background" Value="#1FFFFFFF"/>
         <Setter Property="BorderBrush" Value="{StaticResource Accent}"/>
         <Setter Property="Foreground" Value="{StaticResource Accent}"/>
         <Setter Property="FontWeight" Value="SemiBold"/>
@@ -684,7 +687,7 @@
                         <!-- "On" is unmistakable: a filled accent tile, not a
                              slightly different dot. -->
                         <Trigger Property="IsChecked" Value="True">
-                            <Setter TargetName="Bd" Property="Background" Value="#332CB5D0"/>
+                            <Setter TargetName="Bd" Property="Background" Value="#1FFFFFFF"/>
                             <Setter Property="Foreground" Value="{StaticResource Accent}"/>
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">

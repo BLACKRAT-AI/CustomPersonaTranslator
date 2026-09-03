@@ -294,15 +294,17 @@ export class Hologram {
     const emitter = this._emitter(w, h);
     const phase = this.ring ? this.ring.phase : (this.t * 0.012) % 1;
 
-    // The head fills the panel it is given. Width is the driver -- the panel is
-    // what the user resizes -- with the height as the other limit so a short
-    // panel crops nothing. There is no separate size multiplier any more: a
-    // bigger panel IS a bigger head, which is why the sides used to be empty.
-    const scale = Math.min(w * 0.94 / HEAD_WIDTH, h * 0.94);
+    // Sized so the dark backdrop behind the head (radius 0.8 x scale) fits
+    // inside the canvas and fades out before any edge. There is no panel to
+    // fill, so the head is sized to leave that halo room rather than to reach
+    // the sides -- the window is transparent, so nothing shows there anyway.
+    const scale = Math.min(w * 0.60, h * 0.56);
     const headX = emitter.cx;
-    const headY = scale * 0.52 + h * 0.02;
+    const headY = h * 0.40;
 
+    this._drawAura(ctx, headX, headY, scale);
     this._drawGlow(ctx, emitter, headY, scale, phase);
+
 
     const head = this._head3d();
     if (!head || !head.ok || !head.loaded || this.head <= 0.01) return;
@@ -397,6 +399,32 @@ export class Hologram {
   }
 
   /**
+   * The soft dark radial the head is read against.
+   *
+   * This is SYNTAX's #holoBack, drawn into the canvas instead of as a CSS
+   * backdrop-filter: a dark circle CENTRED ON THE HEAD, masked so it fades to
+   * nothing well before any edge. It is the whole reason bright thin dots are
+   * legible over a bright desktop, and it is not a panel -- there is nothing
+   * behind the projection but the screen.
+   */
+  _drawAura(ctx, headX, headY, scale) {
+    const radius = scale * 0.8;                       // SYNTAX: S * 0.8
+    const depth = Math.min(1, this.head + this.rise * 0.5);
+    if (depth < 0.01) return;
+
+    const gradient = ctx.createRadialGradient(headX, headY, radius * 0.05, headX, headY, radius);
+    gradient.addColorStop(0.00, `rgba(0,0,0,${0.58 * depth})`);
+    gradient.addColorStop(0.58, `rgba(0,0,0,${0.30 * depth})`);
+    gradient.addColorStop(1.00, 'rgba(0,0,0,0)');
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = gradient;
+    ctx.beginPath(); ctx.arc(headX, headY, radius, 0, TAU); ctx.fill();
+    ctx.restore();
+  }
+
+  /**
    * The projector's beam: a cone opening upward out of the aperture.
    *
    * Clipped to a shape that stays inside the panel and fades to nothing before
@@ -409,14 +437,14 @@ export class Hologram {
     const height = emitter.y - top;
     if (height < 8) return;
 
-    const halfTop = Math.min(scale * 0.46, emitter.cx * 0.92);
+    const halfTop = Math.min(scale * 0.34, emitter.cx * 0.88);
     const lit = this.flicker * this.rise;
 
     // Vertical fade along the beam, and the cone's own taper does the sideways
     // fade -- no blur filter, which is what produced hard rectangular edges.
     const gradient = ctx.createLinearGradient(0, emitter.y, 0, top);
-    gradient.addColorStop(0.0, this.palette.at(phase, 0.72, 0.80, 0.30 * lit));
-    gradient.addColorStop(0.35, this.palette.at(phase + 0.12, 0.66, 0.78, 0.13 * lit));
+    gradient.addColorStop(0.0, this.palette.at(phase, 0.72, 0.80, 0.20 * lit));
+    gradient.addColorStop(0.35, this.palette.at(phase + 0.12, 0.66, 0.78, 0.06 * lit));
     gradient.addColorStop(1.0, this.palette.at(phase + 0.3, 0.62, 0.76, 0));
 
     ctx.save();

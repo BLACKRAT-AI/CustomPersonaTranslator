@@ -187,6 +187,41 @@ public partial class SettingsWindow : Window
         _services.ReloadAgents();
     }
 
+
+    /// <summary>
+    /// Updates the selected CLI to the latest published version.
+    ///
+    /// Exists because the app could install a missing CLI but had nothing to
+    /// offer when an installed one was simply too old to run -- it reported the
+    /// CLI's own complaint and left the user with no button to press.
+    /// </summary>
+    private async void OnUpdateCli(object sender, RoutedEventArgs e)
+    {
+        CliUpdateBtn.IsEnabled = false;
+        var wasContent = CliState.Text;
+        CliState.Text = "Updating…";
+
+        try
+        {
+            var failure = await _services.Cli.UpdateAsync(
+                new Progress<string>(line => Dispatcher.Invoke(() => CliState.Text = line)));
+
+            CliState.Text = failure ?? "Updated.";
+            LoadAgentTab();
+        }
+        catch (Exception ex)
+        {
+            CptLog.Write("[cli] update failed: " + ex);
+            CliState.Text = wasContent;
+            MessageBox.Show(this, "Could not update: " + ex.Message,
+                "Custom Persona Translator", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            CliUpdateBtn.IsEnabled = true;
+        }
+    }
+
     private void Load()
     {
         var settings = _services.Settings;

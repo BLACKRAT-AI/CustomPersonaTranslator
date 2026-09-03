@@ -40,7 +40,6 @@ public partial class PersonaWindow : Window
     private bool _webReady;
     private bool _micActive;
     private bool _draggingBar;
-    private bool _suppressAgentPick;
 
     public PersonaWindow() : this(null) { }
 
@@ -66,7 +65,7 @@ public partial class PersonaWindow : Window
             Dispatcher.BeginInvoke(() => PostToWeb(new { type = "level", level }));
         _services.OnTranslationDone += () => Dispatcher.Invoke(BeginDematerialize);
         _services.OnAgentBusy += busy => Dispatcher.Invoke(() => ShowAgentBusy(busy));
-        _services.OnAgentsChanged += () => Dispatcher.Invoke(RefreshAgents);
+        _services.OnAgentsChanged += () => Dispatcher.Invoke(PushActivePersona);
         _services.OnNotification += message => Dispatcher.Invoke(() =>
         {
             Show();
@@ -82,7 +81,6 @@ public partial class PersonaWindow : Window
 
         StandbyToggle.IsChecked = _services.IsStandbyRunning;
         ShowCliStatus(_services.Cli.Status);
-        RefreshAgents();
     }
 
     /// <summary>When pinned, the hologram stays visible after a reply finishes.</summary>
@@ -198,10 +196,14 @@ public partial class PersonaWindow : Window
     {
         if (_services is null) return;
         var persona = _services.ActivePersona;
-        HeaderName.Text = (persona.Name ?? "").ToUpperInvariant();
+        // The AGENT is what the user is talking TO. A persona is how it sounds
+        // and a CLI is what runs it; neither is the thing being addressed, so
+        // the bar names the agent and falls back to the persona only when no
+        // agents have been set up yet.
+        HeaderName.Text = (_services.ActiveAgent?.Name ?? persona.Name ?? "").ToUpperInvariant();
 
         ApplyRingPalette(persona.Visual.HologramColor);
-        SizeToHologram(persona.Visual.HologramScale);
+        SizeToHologram();
 
         if (!_webReady) return;
         PostToWeb(new
@@ -212,7 +214,6 @@ public partial class PersonaWindow : Window
             // persona is not limited to one flat brush.
             color = persona.Visual.HologramColor,
             glitch = persona.Visual.GlitchIntensity,
-            size = persona.Visual.HologramScale,
             transcript = persona.ShowTranscriptPanel,
             avatarVisible = AvatarVisible,
             // The compact bar owns the microphone, and a floating window has no
@@ -233,64 +234,27 @@ public partial class PersonaWindow : Window
     private void SetRingLit(bool lit) => Ring.SetLit(lit);
 
     /// <summary>
-    /// Sizes the panel from the persona's setting.
+    /// One size, chosen once.
     ///
-    /// WIDTH is the control. The head fills whatever panel it is given, so the
-    /// panel's width IS the head's size -- which is why the head no longer sits
-    /// in a field of empty space. Height follows from the head's proportions so
-    /// nothing is cropped, and both are capped to the work area.
+    /// There is no size setting: a slider for it was one more thing to get
+    /// wrong for no benefit, and the projection has exactly one set of
+    /// proportions that reads well. The window is transparent apart from the
+    /// projection and the bar, so its size is not something the user sees.
     /// </summary>
-    private void SizeToHologram(double stored)
+    private void SizeToHologram()
     {
-        // 2.5 and above can only be a value saved under the previous meaning of
-        // this field, where it multiplied the HEAD rather than the panel. Read
-        // back as the default instead of as a window most of a screen tall.
-        var scale = stored >= 2.5 ? 1.0 : stored;
-
-        // The panel width at scale 1. Half the previous default, which is what
-        // the previous default should have been.
-        const double BaseWidth = 330;
-        const double BarHeight = 96;
+        const double PreferredWidth = 460;
+        const double PreferredHeight = 620;
 
         var work = SystemParameters.WorkArea;
-        var width = Math.Clamp(BaseWidth * Math.Clamp(scale, 0.6, 2.0), 240, work.Width * 0.6);
-
-        // The head cloud is about 0.576 wide for 1.0 tall, so a panel that shows
-        // it full-width needs this much room above the bar.
-        var height = Math.Clamp(width / 0.576 * 0.96 + BarHeight, 380, work.Height * 0.92);
+        var width = Math.Min(PreferredWidth, work.Width * 0.5);
+        var height = Math.Min(PreferredHeight, work.Height * 0.8);
 
         if (Math.Abs(Width - width) < 1 && Math.Abs(Height - height) < 1) return;
 
         Width = width;
         Height = height;
         PositionBottomRight();
-    }
-
-    // --- agent picker -----------------------------------------------------
-
-    /// <summary>
-    /// Fills the bar's agent picker. Hidden entirely when no agents are
-    /// configured, so the bar does not grow a control that does nothing.
-    /// </summary>
-    private void RefreshAgents()
-    {
-        if (_services is null) return;
-
-        var agents = _services.Settings.Agents.Agents;
-        AgentPicker.Visibility = agents.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
-        if (agents.Count == 0) return;
-
-        _suppressAgentPick = true;
-        AgentPicker.ItemsSource = agents;
-        AgentPicker.DisplayMemberPath = nameof(AgentProfile.Name);
-        AgentPicker.SelectedItem = _services.ActiveAgent;
-        _suppressAgentPick = false;
-    }
-
-    private void OnAgentPicked(object sender, SelectionChangedEventArgs e)
-    {
-        if (_suppressAgentPick || _services is null) return;
-        if (AgentPicker.SelectedItem is AgentProfile agent) _services.SetActiveAgent(agent.Id);
     }
 
     // --- status strip -----------------------------------------------------
