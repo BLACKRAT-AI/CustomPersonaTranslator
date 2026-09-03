@@ -288,19 +288,22 @@ public partial class SettingsWindow : Window
 
         var stored = _services.Settings.Rewrite.ProviderId;
         var provider = providers.FirstOrDefault(p =>
-            string.Equals(p.Id, stored, StringComparison.OrdinalIgnoreCase));
+            string.Equals(p.Id, stored, StringComparison.OrdinalIgnoreCase))
+            ?? _services.RewriteCli.Provider;
 
         _suppressRewriteProvider = true;
-        RewriteProvider.SelectedItem = provider ?? _services.RewriteCli.Provider;
+        RewriteProvider.SelectedValue = provider.Id;
         _suppressRewriteProvider = false;
 
-        LoadRewriteOptions();
+        // The provider is passed in, not read back off the ComboBox. Reading it
+        // back returned null when the selection had not settled yet, which left
+        // the option list empty -- so model, effort and thinking could not be
+        // chosen at all.
+        LoadRewriteOptions(provider);
     }
 
-    private void LoadRewriteOptions()
+    private void LoadRewriteOptions(CliProvider provider)
     {
-        if (RewriteProvider.SelectedItem is not CliProvider provider) return;
-
         var stored = _services.Settings.Rewrite.OptionsFor(provider.Id);
         _rewriteRows.Clear();
 
@@ -321,7 +324,7 @@ public partial class SettingsWindow : Window
         _services.Settings.Rewrite.ProviderId = provider.Id;
         _services.Settings.Save();
         _services.ReloadRewriteCli();
-        LoadRewriteOptions();
+        LoadRewriteOptions(provider);
     }
 
     private void Load()

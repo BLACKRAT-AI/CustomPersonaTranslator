@@ -42,6 +42,38 @@ public sealed class AgentRow : ObservableObject
         set { _agent.TriggerPhrase = value; Raise(); RefreshSetup(); }
     }
 
+
+    /// <summary>
+    /// The chosen ids, and what the pickers bind to.
+    ///
+    /// Bound by ID rather than by instance: a ComboBox inside a DataTemplate
+    /// can have SelectedItem applied before ItemsSource, and an item that is
+    /// not in the (still empty) list makes WPF clear the selection — which is
+    /// why the persona picker came up blank however many times it was set.
+    /// </summary>
+    public string ProviderId
+    {
+        get => _agent.ProviderId;
+        set
+        {
+            if (string.IsNullOrEmpty(value) || value == _agent.ProviderId) return;
+            _agent.ProviderId = value;
+            Raise();
+            RefreshSetup();
+        }
+    }
+
+    public string PersonaId
+    {
+        get => _agent.PersonaId;
+        set
+        {
+            if (string.IsNullOrEmpty(value) || value == _agent.PersonaId) return;
+            _agent.PersonaId = value;
+            Raise();
+            RefreshSetup();
+        }
+    }
     public CliProvider? Provider
     {
         get => CliProviderCatalog.Find(_agent.ProviderId);

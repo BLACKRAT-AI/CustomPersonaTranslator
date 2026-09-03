@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Media;
+using CPT.Shell.Controls;
 using CPT.Core.Models;
 using CPT.Core.Personas;
 using CPT.Core.Research;
@@ -124,9 +125,68 @@ public sealed partial class PersonaEditorView : SettingsPage
         return brush;
     }
 
+
+    // --- the colour wheel -------------------------------------------------
+
+    private bool _suppressColorSync;
+
+    /// <summary>
+    /// Keeps the wheel, the brightness slider, the hex box and the swatch
+    /// showing the same colour.
+    ///
+    /// One of them is always the one the user just touched, so each entry point
+    /// suppresses the others rather than letting them chase each other round.
+    /// </summary>
+    private void SyncColorFrom(Color colour, bool updateHex, bool updateWheel, bool updateSlider)
+    {
+        _suppressColorSync = true;
+        try
+        {
+            if (updateHex) ColorBox.Text = $"#{colour.R:X2}{colour.G:X2}{colour.B:X2}";
+            if (updateWheel) Wheel.SelectedColor = colour;
+            if (updateSlider) ColorLightness.Value = ColorWheel.ToHsl(colour).Lightness;
+            ColorSwatch.Background = new SolidColorBrush(colour);
+        }
+        finally
+        {
+            _suppressColorSync = false;
+        }
+    }
+
+    private void OnColorHexChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    {
+        if (_suppressColorSync || Wheel is null) return;
+        if (TryParseColor(ColorBox.Text) is not { } colour) return;      // mid-typing is not an error
+
+        SyncColorFrom(colour, updateHex: false, updateWheel: true, updateSlider: true);
+    }
+
+    private void OnColorWheelPicked(Color colour) =>
+        SyncColorFrom(colour, updateHex: true, updateWheel: false, updateSlider: false);
+
+    private void OnColorLightnessChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_suppressColorSync || Wheel is null) return;
+
+        var (hue, saturation, _) = ColorWheel.ToHsl(Wheel.SelectedColor);
+        SyncColorFrom(ColorWheel.FromHsl(hue, saturation, e.NewValue),
+            updateHex: true, updateWheel: true, updateSlider: false);
+    }
+
+    /// <summary>A colour, or null while the user is still typing one.</summary>
+    private static Color? TryParseColor(string? text)
+    {
+        var value = text?.Trim();
+        if (string.IsNullOrEmpty(value)) return null;
+
+        try { return (Color)ColorConverter.ConvertFromString(value); }
+        catch (FormatException) { return null; }
+        catch (NotSupportedException) { return null; }
+    }
     private void LoadHologramLook(Persona? persona)
     {
         ColorCombo.ItemsSource = ColorOptions;
+        Wheel.ColorPicked += OnColorWheelPicked;
 
         var stored = persona?.Visual.HologramColor ?? "prismatic";
         var match = Array.Find(ColorOptions,
@@ -137,6 +197,10 @@ public sealed partial class PersonaEditorView : SettingsPage
         // on Custom with the hex already filled in rather than being lost.
         ColorCombo.SelectedItem = match ?? ColorOptions[^1];
         if (match is null) ColorBox.Text = stored;
+
+        // Whatever the hex box ended up holding is the colour the wheel shows.
+        if (TryParseColor(ColorBox.Text) is { } colour)
+            SyncColorFrom(colour, updateHex: false, updateWheel: true, updateSlider: true);
 
 
     }

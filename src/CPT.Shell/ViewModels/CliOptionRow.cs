@@ -35,6 +35,23 @@ public sealed class CliOptionRow : ObservableObject
         set => Set(ref _selected, value ?? Option.Resolve(null));
     }
 
-    /// <summary>The id to persist for this option.</summary>
-    public string SelectedId => _selected.Id;
+    /// <summary>
+    /// The chosen id, and what the picker binds to.
+    ///
+    /// Bound by ID rather than by instance because a ComboBox inside a
+    /// DataTemplate can have SelectedItem applied before ItemsSource: the item
+    /// is then not in the (still empty) list, WPF clears the selection, and the
+    /// picker comes up blank with the stored choice lost. A value has no such
+    /// ordering problem.
+    /// </summary>
+    public string SelectedId
+    {
+        get => _selected.Id;
+        set
+        {
+            if (value is null || value == _selected.Id) return;
+            Selected = Option.Resolve(value);
+            Raise();
+        }
+    }
 }

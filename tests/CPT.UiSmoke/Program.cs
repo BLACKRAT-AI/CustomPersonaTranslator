@@ -6,6 +6,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.IO;
 using CPT.Shell;
+using CPT.Shell.Controls;
 using CPT.Shell.Views;
 
 namespace CPT.UiSmoke;
@@ -46,6 +47,7 @@ public static class Program
         var failures = 0;
         AppServices? services = null;
 
+        failures += CheckColorWheel();
         failures += Check("AppServices", () => services = new AppServices());
         if (services is null)
         {
@@ -115,6 +117,35 @@ public static class Program
 
         Console.WriteLine("ok    ring rendered to " + path);
         return 0;
+    }
+
+
+    /// <summary>
+    /// Round-trips the colour wheel's conversions.
+    ///
+    /// Checked here rather than in the unit tests because the maths lives in a
+    /// WPF control: a hue that does not survive a round trip makes the marker
+    /// land somewhere the user did not click.
+    /// </summary>
+    private static int CheckColorWheel()
+    {
+        var failures = 0;
+        foreach (var hex in new[] { "#6FC2D6", "#E0A03C", "#63D68A", "#B388FF", "#FFFFFF", "#101010" })
+        {
+            var original = (Color)ColorConverter.ConvertFromString(hex);
+            var (h, s, l) = ColorWheel.ToHsl(original);
+            var round = ColorWheel.FromHsl(h, s, l);
+
+            var drift = Math.Max(Math.Abs(original.R - round.R),
+                        Math.Max(Math.Abs(original.G - round.G), Math.Abs(original.B - round.B)));
+
+            if (drift <= 1) continue;
+            Console.WriteLine($"FAIL  colour {hex} round-tripped to #{round.R:X2}{round.G:X2}{round.B:X2}");
+            failures++;
+        }
+
+        Console.WriteLine(failures == 0 ? "ok    ColorWheel round-trips" : "FAIL  ColorWheel");
+        return failures;
     }
 
     private static IEnumerable<(string Name, Func<FrameworkElement> Make)> Pages(AppServices services) =>
