@@ -102,15 +102,31 @@
                                                       ItemsSource="{Binding Providers}"
                                                       SelectedValuePath="Id"
                                                       SelectedValue="{Binding ProviderId, Mode=TwoWay}"
-                                                      DisplayMemberPath="DisplayName"
-                                                      ToolTip="Which coding CLI runs this agent's turns"/>
+                                                      ToolTip="Which coding CLI runs this agent's turns">
+                                                <ComboBox.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding DisplayName}"/>
+                                                    </DataTemplate>
+                                                </ComboBox.ItemTemplate>
+                                            </ComboBox>
                                             <ComboBox Grid.Column="1"
                                                       Margin="4,0,0,0"
                                                       ItemsSource="{Binding Personas}"
                                                       SelectedValuePath="Id"
                                                       SelectedValue="{Binding PersonaId, Mode=TwoWay}"
-                                                      DisplayMemberPath="Name"
-                                                      ToolTip="Whose voice and manner the reply is spoken in"/>
+                                                      ToolTip="Whose voice and manner the reply is spoken in">
+                                                <!-- An explicit ItemTemplate, not DisplayMemberPath: the
+                                                     retemplated ComboBox renders the closed box through
+                                                     SelectionBoxItemTemplate, and the template WPF
+                                                     generates from DisplayMemberPath does not reach it,
+                                                     so the box fell back to ToString() and showed
+                                                     "CPT.Core.Models.Persona". -->
+                                                <ComboBox.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding Name}"/>
+                                                    </DataTemplate>
+                                                </ComboBox.ItemTemplate>
+                                            </ComboBox>
                                         </Grid>
 
                                         <DockPanel Grid.Row="2" Grid.ColumnSpan="2" Margin="0,6,0,0">

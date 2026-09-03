@@ -212,7 +212,9 @@ public static class Program
             }
 
             var combos = Descendants<ComboBox>(container).ToList();
-            var picker = combos.FirstOrDefault(c => c.SelectedValuePath == "Id" && c.DisplayMemberPath == "Name");
+            // Identified by what it offers, not by how it is styled: the styling
+            // is exactly what keeps changing.
+            var picker = combos.FirstOrDefault(c => c.Items.OfType<Persona>().Any());
             if (picker is null)
             {
                 Console.WriteLine($"FAIL  agent picker: not found among {combos.Count} combo boxes");
@@ -234,6 +236,17 @@ public static class Program
             if (!ReferenceEquals(picker.SelectedItem, picker.Items.OfType<Persona>().FirstOrDefault(p => p.Id == wanted.Id)))
             {
                 Console.WriteLine("FAIL  agent picker: the control did not hold the selection");
+                failures++;
+            }
+
+            // What the CLOSED box actually renders. Checking SelectedItem is not
+            // enough: with the retemplated ComboBox, DisplayMemberPath does not
+            // reach the selection box, so it silently fell back to ToString()
+            // and displayed "CPT.Core.Models.Persona" over a correct selection.
+            var shown = SelectionBoxText(picker);
+            if (shown != wanted.Name)
+            {
+                Console.WriteLine($"FAIL  agent picker: box shows '{shown}', expected '{wanted.Name}'");
                 failures++;
             }
 
@@ -295,6 +308,29 @@ public static class Program
 
         Console.WriteLine($"ok    persona voice options ({actual} for {provider.SelectedValue})");
         return 0;
+    }
+
+    /// <summary>
+    /// The text a closed ComboBox is showing, read out of its visual tree.
+    ///
+    /// The only way to catch a selection box that is rendering ToString(): the
+    /// selection is correct, the binding is correct, and the user still sees a
+    /// type name.
+    /// </summary>
+    private static string SelectionBoxText(ComboBox combo)
+    {
+        combo.ApplyTemplate();
+        combo.UpdateLayout();
+
+        foreach (var presenter in Descendants<ContentPresenter>(combo))
+        {
+            if (presenter.Content is null) continue;
+            presenter.ApplyTemplate();
+            var text = Descendants<TextBlock>(presenter).FirstOrDefault();
+            if (text is not null) return text.Text;
+        }
+
+        return combo.SelectionBoxItem?.ToString() ?? "";
     }
     private static T? FindByName<T>(FrameworkElement root, string name) where T : FrameworkElement =>
         root.FindName(name) as T ?? Descendants<T>(root).FirstOrDefault(e => e.Name == name);

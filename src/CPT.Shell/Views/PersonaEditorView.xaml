@@ -196,7 +196,13 @@
                             <TextBlock Text="PIPER VOICE" Style="{StaticResource Caption}"/>
                             <DockPanel LastChildFill="True">
                                 <Button DockPanel.Dock="Right" Content="Audition" Click="OnAudition"/>
-                                <ComboBox x:Name="VoiceCombo" DisplayMemberPath="DisplayName"/>
+                                <ComboBox x:Name="VoiceCombo">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding DisplayName}"/>
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
                             </DockPanel>
                             <TextBlock x:Name="VoiceStatus" Text="" Style="{StaticResource Hint}" Margin="2,4,0,0"/>
                         </StackPanel>
