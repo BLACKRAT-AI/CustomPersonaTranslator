@@ -332,7 +332,9 @@ public partial class SettingsWindow : Window
         var settings = _services.Settings;
 
         LoadCliTab();
+        LoadRewriteTab();
         LoadPersonaList();
+        LoadAgents();
 
         StandbyEnabled.IsChecked = settings.Standby.Enabled;
         WakePhrase.Text = settings.Standby.WakePhrase;

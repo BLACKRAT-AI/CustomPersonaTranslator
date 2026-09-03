@@ -3,6 +3,10 @@ using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Linq;
+using CPT.Core.Agents;
+using CPT.Core.Cli;
+using CPT.Core.Models;
 using System.Windows.Media.Imaging;
 using System.IO;
 using CPT.Shell;
@@ -62,6 +66,9 @@ public static class Program
 
             foreach (var (name, make) in Pages(services))
                 failures += Check(name, () => Realize(make()));
+
+            failures += CheckAgentPersonaPicker(services);
+            failures += CheckRewriteOptions(services);
         }
         finally
         {
@@ -146,6 +153,161 @@ public static class Program
 
         Console.WriteLine(failures == 0 ? "ok    ColorWheel round-trips" : "FAIL  ColorWheel");
         return failures;
+    }
+
+
+    /// <summary>
+    /// Drives the agent row's persona picker the way a user does.
+    ///
+    /// This exists because "the picker does not stick" was diagnosed twice from
+    /// reading the XAML and fixed twice without being reproduced. Building the
+    /// window and setting the selection is the only way to know.
+    /// </summary>
+    private static int CheckAgentPersonaPicker(AppServices services)
+    {
+        var personas = services.Personas.LoadAll().ToList();
+        if (personas.Count == 0)
+        {
+            Console.WriteLine("skip  agent persona picker: no personas on this machine");
+            return 0;
+        }
+
+        // A throwaway agent, removed again below so the user's list is untouched.
+        var agent = new AgentProfile { Name = "smoke", PersonaId = "", ProviderId = "claude-code" };
+        services.Settings.Agents.Agents.Add(agent);
+
+        try
+        {
+            var window = new SettingsWindow(services);
+            window.WindowStartupLocation = WindowStartupLocation.Manual;
+            window.Left = -30000;
+            window.Top = -30000;
+            window.Measure(new Size(1200, 900));
+            window.Arrange(new Rect(0, 0, 1200, 900));
+            window.UpdateLayout();
+
+            var list = FindByName<ListBox>(window, "AgentList");
+            if (list is null) { Console.WriteLine("FAIL  agent picker: AgentList not found"); return 1; }
+
+            // Offscreen there is no render pass, so a virtualizing panel generates
+            // no containers at all. Turning virtualization off for the check makes
+            // the rows real without changing what the app does.
+            VirtualizingPanel.SetIsVirtualizing(list, false);
+            list.UpdateLayout();
+            list.Measure(new Size(900, 700));
+            list.Arrange(new Rect(0, 0, 900, 700));
+            list.UpdateLayout();
+
+            var container = list.ItemContainerGenerator.ContainerFromIndex(list.Items.Count - 1) as ListBoxItem;
+            container?.ApplyTemplate();
+            container?.UpdateLayout();
+            if (container is null)
+            {
+                Console.WriteLine("FAIL  agent picker: no row container"
+                    + " (items=" + list.Items.Count
+                    + ", status=" + list.ItemContainerGenerator.Status
+                    + ", hasSource=" + (list.ItemsSource is not null)
+                    + ", actualHeight=" + list.ActualHeight + ")");
+                return 1;
+            }
+
+            var combos = Descendants<ComboBox>(container).ToList();
+            var picker = combos.FirstOrDefault(c => c.SelectedValuePath == "Id" && c.DisplayMemberPath == "Name");
+            if (picker is null)
+            {
+                Console.WriteLine($"FAIL  agent picker: not found among {combos.Count} combo boxes");
+                return 1;
+            }
+
+            if (picker.Items.Count == 0)
+            {
+                Console.WriteLine("FAIL  agent picker: no personas offered");
+                return 1;
+            }
+
+            // Pick one, exactly as the user does, and see whether it stuck.
+            var wanted = personas[0];
+            picker.SelectedValue = wanted.Id;
+            window.UpdateLayout();
+
+            var failures = 0;
+            if (!ReferenceEquals(picker.SelectedItem, picker.Items.OfType<Persona>().FirstOrDefault(p => p.Id == wanted.Id)))
+            {
+                Console.WriteLine("FAIL  agent picker: the control did not hold the selection");
+                failures++;
+            }
+
+            if (agent.PersonaId != wanted.Id)
+            {
+                Console.WriteLine($"FAIL  agent picker: profile still says '{agent.PersonaId}'");
+                failures++;
+            }
+
+            window.Close();
+            Console.WriteLine(failures == 0
+                ? $"ok    agent persona picker ({picker.Items.Count} personas, selection stuck)"
+                : "FAIL  agent persona picker");
+            return failures;
+        }
+        finally
+        {
+            // Closing the window persists the agent list, so removing the throwaway
+            // from memory is not enough -- it has to be written back out, or a
+            // smoke run leaves "smoke" agents in the user's real settings.
+            services.Settings.Agents.Agents.Remove(agent);
+            services.Settings.Save();
+        }
+    }
+
+
+    /// <summary>
+    /// Checks the persona voice's own option list is actually populated.
+    ///
+    /// Same failure as the persona picker and found the same way: the tab was
+    /// never loaded, so the UI said the CLI exposed no options when it exposes
+    /// several.
+    /// </summary>
+    private static int CheckRewriteOptions(AppServices services)
+    {
+        var window = new SettingsWindow(services)
+        {
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -30000,
+            Top = -30000,
+        };
+        window.Measure(new Size(1200, 900));
+        window.Arrange(new Rect(0, 0, 1200, 900));
+        window.UpdateLayout();
+
+        var provider = FindByName<ComboBox>(window, "RewriteProvider");
+        var options = FindByName<ItemsControl>(window, "RewriteOptions");
+        var expected = CliOrchestrator.AvailableProviders
+            .FirstOrDefault(p => p.Id == (string?)provider?.SelectedValue)?.Options.Count ?? 0;
+
+        var actual = options?.Items.Count ?? -1;
+        window.Close();
+
+        if (provider?.SelectedValue is null || actual != expected)
+        {
+            Console.WriteLine($"FAIL  persona voice options: {actual} shown, {expected} expected");
+            return 1;
+        }
+
+        Console.WriteLine($"ok    persona voice options ({actual} for {provider.SelectedValue})");
+        return 0;
+    }
+    private static T? FindByName<T>(FrameworkElement root, string name) where T : FrameworkElement =>
+        root.FindName(name) as T ?? Descendants<T>(root).FirstOrDefault(e => e.Name == name);
+
+    private static IEnumerable<T> Descendants<T>(DependencyObject root) where T : DependencyObject
+    {
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T match) yield return match;
+            foreach (var deeper in Descendants<T>(child)) yield return deeper;
+        }
     }
 
     private static IEnumerable<(string Name, Func<FrameworkElement> Make)> Pages(AppServices services) =>
