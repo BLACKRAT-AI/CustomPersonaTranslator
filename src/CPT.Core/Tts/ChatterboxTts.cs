@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using CPT.Core.Diagnostics;
 using NAudio.Wave;
 
 namespace CPT.Core.Tts;
@@ -46,6 +47,16 @@ public sealed class ChatterboxTts : ITtsEngine, IDisposable
     // that on every editor open.
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _availCache = new();
 
+    /// <summary>
+    /// How long the import probe gets.
+    ///
+    /// Measured at 26.5s warm on this machine: importing chatterbox.tts pulls in
+    /// diffusers, transformers and torch. The old 30s budget was under the warm
+    /// time, so a cold start timed out and cloning silently reported itself
+    /// unavailable for the whole session.
+    /// </summary>
+    private static readonly TimeSpan AvailabilityProbeTimeout = TimeSpan.FromMinutes(2);
+
     public static bool IsAvailable(string pythonExe, string scriptPath)
     {
         if (!File.Exists(pythonExe) || !File.Exists(scriptPath)) return false;
@@ -69,8 +80,18 @@ public sealed class ChatterboxTts : ITtsEngine, IDisposable
                 CreateNoWindow = true,
             };
             using var p = Process.Start(psi)!;
-            if (!p.WaitForExit(30000)) { try { p.Kill(); } catch { } return _availCache[key] = false; }
+            if (!p.WaitForExit((int)AvailabilityProbeTimeout.TotalMilliseconds))
+            {
+                try { p.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+                // NOT cached. A timeout is "we did not find out", not "no", and
+                // caching it turned one slow cold start into cloning being
+                // unavailable until the app was restarted.
+                CptLog.Write("[tts] clone availability probe timed out; will try again later");
+                return false;
+            }
+
             var ok = p.ExitCode == 0;
+            if (!ok) CptLog.Write("[tts] clone availability probe failed with exit code " + p.ExitCode);
             return _availCache[key] = ok;
         }
         catch { return _availCache[key] = false; }
