@@ -18,6 +18,11 @@ public class CliUpdateTests
     [InlineData("Update required before you can run this command.")]
     [InlineData("Unsupported version. Please upgrade.")]
     [InlineData("codex: your version is too old")]
+    // The real one, from Claude Code 2.1.220 refusing a model. None of the
+    // obvious phrases appear in it, which is why the first check never fired.
+    [InlineData("API Error: 400 Claude Code 2.1.220 does not support this model; "
+              + "version 2.1.251 or newer is required. Run 'claude update', or update "
+              + "the Claude desktop app, then try again.")]
     public void A_vendors_out_of_date_message_is_recognised(string failure)
     {
         Assert.True(CliInstaller.LooksOutOfDate(failure));

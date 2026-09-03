@@ -298,9 +298,11 @@ export class Hologram {
     // inside the canvas and fades out before any edge. There is no panel to
     // fill, so the head is sized to leave that halo room rather than to reach
     // the sides -- the window is transparent, so nothing shows there anyway.
-    const scale = Math.min(w * 0.60, h * 0.56);
+    const scale = Math.min(w * 0.60, h * 0.62);
     const headX = emitter.cx;
-    const headY = h * 0.40;
+    // Half the gap it used to leave above the bar: the projection sat marooned
+    // in the middle of the window with a long empty beam under it.
+    const headY = scale * 0.5 + h * 0.14;
 
     this._drawAura(ctx, headX, headY, scale);
     this._drawGlow(ctx, emitter, headY, scale, phase);
@@ -408,7 +410,9 @@ export class Hologram {
    * behind the projection but the screen.
    */
   _drawAura(ctx, headX, headY, scale) {
-    const radius = scale * 0.8;                       // SYNTAX: S * 0.8
+    // SYNTAX uses S * 0.8. Clamped so a head sitting low in the canvas cannot
+    // push the halo off the top, which would put a hard edge back.
+    const radius = Math.min(scale * 0.8, headY * 0.98);
     const depth = Math.min(1, this.head + this.rise * 0.5);
     if (depth < 0.01) return;
 

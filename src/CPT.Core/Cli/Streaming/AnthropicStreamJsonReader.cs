@@ -40,6 +40,18 @@ public sealed class AnthropicStreamJsonReader : ICliTurnReader
             switch (JsonLine.StringOrNull(root, "type"))
             {
                 case "assistant":
+                    // An API error is delivered as an assistant message with a
+                    // flag on the envelope. Without honouring that flag the app
+                    // treats "API Error: 400 ... version 2.1.251 or newer is
+                    // required" as the agent's ANSWER and reads it out in
+                    // persona -- which is exactly what asking a question and
+                    // getting nothing useful looked like.
+                    if (JsonLine.BoolOrDefault(root, "is_api_error_message"))
+                    {
+                        foreach (var text in AssistantTextBlocks(root)) _error ??= text;
+                        break;
+                    }
+
                     foreach (var text in AssistantTextBlocks(root))
                     {
                         _sawAssistantText = true;
@@ -48,7 +60,11 @@ public sealed class AnthropicStreamJsonReader : ICliTurnReader
                     break;
 
                 case "result":
-                    if (JsonLine.StringOrNull(root, "subtype") is { } subtype && subtype != "success")
+                    // is_error marks a turn the CLI itself considers failed,
+                    // whatever its subtype says.
+                    if (JsonLine.BoolOrDefault(root, "is_error"))
+                        _error ??= JsonLine.StringOrNull(root, "result") ?? "The CLI reported an error.";
+                    else if (JsonLine.StringOrNull(root, "subtype") is { } subtype && subtype != "success")
                         _error = JsonLine.StringOrNull(root, "result") ?? subtype;
                     else
                         _resultFallback = JsonLine.StringOrNull(root, "result");

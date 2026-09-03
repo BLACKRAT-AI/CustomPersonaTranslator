@@ -4,7 +4,7 @@
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         xmlns:local="clr-namespace:CPT.Shell"
         Title="Persona"
-        Width="460" Height="620"
+        Width="460" Height="530"
         WindowStyle="None"
         ResizeMode="NoResize"
         AllowsTransparency="True"
@@ -32,7 +32,10 @@
         </Grid>
 
         <!-- ============== PROJECTOR BAR ============== -->
-        <Grid Grid.Row="1" Margin="8,0,8,8">
+        <!-- Generous margin on purpose: the ring's bloom is a drop shadow and
+             was being cut off square by the window edge. This is the room it
+             needs to fade all the way to nothing. -->
+        <Grid Grid.Row="1" Margin="26,0,26,24">
             <Border x:Name="Bar"
                     Background="#F2141619"
                     BorderBrush="#FF33363D"
@@ -41,10 +44,7 @@
                     MouseLeftButtonDown="OnBarDragStart"
                     Cursor="SizeAll">
                 <Grid Margin="6,5">
-                    <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         
                             <!-- Row 0: the controls. -->
                             <DockPanel Grid.Row="0" LastChildFill="True">
@@ -134,32 +134,6 @@
                                     </Grid>
                                 </Border>
                             </DockPanel>
-
-                            <!-- Row 1: which CLI is linked, and what it is doing. -->
-                            <Border Grid.Row="1"
-                                    x:Name="CliStrip"
-                                    Margin="2,5,2,0"
-                                    Padding="8,4"
-                                    CornerRadius="7"
-                                    Background="#FF1B1B1B"
-                                    Cursor="Hand"
-                                    MouseLeftButtonUp="OnCliStripClick"
-                                    ToolTip="Open CLI setup">
-                                <DockPanel LastChildFill="True">
-                                    <Ellipse x:Name="CliStatusDot"
-                                             DockPanel.Dock="Left"
-                                             Width="7" Height="7"
-                                             Margin="0,0,8,0"
-                                             VerticalAlignment="Center"
-                                             Fill="#FF6E6E6E"/>
-                                    <TextBlock x:Name="CliStatusText"
-                                               Text="Checking CLI…"
-                                               Foreground="#FF9A9A9A"
-                                               FontSize="10"
-                                               VerticalAlignment="Center"
-                                               TextTrimming="CharacterEllipsis"/>
-                                </DockPanel>
-                            </Border>
                         </Grid>
                     </Border>
 

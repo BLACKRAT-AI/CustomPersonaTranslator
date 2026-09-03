@@ -127,14 +127,24 @@ public static class CliInstaller
         if (string.IsNullOrWhiteSpace(failure)) return false;
 
         var text = failure.ToLowerInvariant();
+
+        // Real wording, from Claude Code 2.1.220 refusing a model:
+        //   "API Error: 400 Claude Code 2.1.220 does not support this model;
+        //    version 2.1.251 or newer is required. Run 'claude update' ..."
+        // None of the obvious phrases ("out of date", "please update") appear in
+        // it, which is why the first version of this check never fired.
         return text.Contains("out of date")
             || text.Contains("out-of-date")
             || text.Contains("no longer supported")
             || text.Contains("unsupported version")
+            || text.Contains("or newer is required")
+            || text.Contains("does not support this model")
             || text.Contains("please update")
             || text.Contains("please upgrade")
             || text.Contains("update required")
             || text.Contains("requires an update")
+            || text.Contains("update'")
+            || text.Contains("update\"")
             || (text.Contains("version") && text.Contains("too old"));
     }
 

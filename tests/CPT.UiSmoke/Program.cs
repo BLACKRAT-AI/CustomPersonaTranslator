@@ -78,38 +78,35 @@ public static class Program
     /// <summary>
     /// Renders the prismatic ring to a PNG without showing anything.
     ///
-    /// The ring is the one piece of chrome that cannot be checked by
-    /// constructing it -- it either glows and travels round the panel or it
-    /// does not, and that is only visible in pixels.
+    /// Laid out exactly as the app lays it out -- a bar-shaped ring with the
+    /// window's margin around it -- because the two things worth checking are
+    /// whether the corners read as arcs and whether the bloom fades out or gets
+    /// cut off square by the edge it is given.
     /// </summary>
     private static int RenderRing(string path, double energy)
     {
-        const int width = 330, height = 640;
+        const int width = 460, height = 150;
+        const int margin = 26;
 
-        var ring = new PrismaticBorder { CornerRadius = 14, Width = width, Height = height };
+        var ring = new PrismaticBorder { CornerRadius = 14 };
         ring.SetPalette("prismatic");
         ring.SetLit(energy > 0);
-
-        // Drive the animation directly: CompositionTarget.Rendering never fires
-        // without a live window, so the frames are stepped by hand.
         ring.AdvanceForTest(energy, phase: 0.0);
 
-        ring.Measure(new Size(width, height));
-        ring.Arrange(new Rect(0, 0, width, height));
-        ring.UpdateLayout();
-
-        var backdrop = new Border
+        var host = new Grid
         {
             Width = width, Height = height,
             Background = new SolidColorBrush(Color.FromRgb(0x2B, 0x2F, 0x36)),
-            Child = ring,
         };
-        backdrop.Measure(new Size(width, height));
-        backdrop.Arrange(new Rect(0, 0, width, height));
-        backdrop.UpdateLayout();
+        ring.Margin = new Thickness(margin);
+        host.Children.Add(ring);
+
+        host.Measure(new Size(width, height));
+        host.Arrange(new Rect(0, 0, width, height));
+        host.UpdateLayout();
 
         var bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
-        bitmap.Render(backdrop);
+        bitmap.Render(host);
 
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(bitmap));

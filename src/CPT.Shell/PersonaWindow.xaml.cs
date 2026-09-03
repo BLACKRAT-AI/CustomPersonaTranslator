@@ -39,7 +39,7 @@ public partial class PersonaWindow : Window
     private readonly AppServices? _services;
     private bool _webReady;
     private bool _micActive;
-    private bool _draggingBar;
+    private CliReadiness? _lastReportedReadiness;
 
     public PersonaWindow() : this(null) { }
 
@@ -162,15 +162,18 @@ public partial class PersonaWindow : Window
     }
 
     /// <summary>
-    /// The wait between sending and hearing back. The spinner turns and the
-    /// panel lights, so a slow model reads as thinking rather than as nothing
-    /// happening. Speaking takes over from here.
+    /// The wait between sending and hearing back.
+    ///
+    /// The ring turns, but the window is NOT shown: a turn that ends in an
+    /// error or an empty reply has nothing to say, and putting a head on screen
+    /// to say nothing is worse than staying hidden. Speaking is what raises it,
+    /// in ShowAndAppear.
     /// </summary>
     private void ShowAgentBusy(bool busy)
     {
         SetRingLit(busy);
-        if (busy) { Show(); PostToWeb(new { type = "thinking" }); }
-        else if (!Pinned) PostToWeb(new { type = "transcript_clear" });
+        if (!busy && !Pinned) PostToWeb(new { type = "transcript_clear" });
+        else if (busy) PostToWeb(new { type = "thinking" });
     }
 
     private void ShowAndAppear()
@@ -244,7 +247,7 @@ public partial class PersonaWindow : Window
     private void SizeToHologram()
     {
         const double PreferredWidth = 460;
-        const double PreferredHeight = 620;
+        const double PreferredHeight = 530;
 
         var work = SystemParameters.WorkArea;
         var width = Math.Min(PreferredWidth, work.Width * 0.5);
@@ -257,27 +260,33 @@ public partial class PersonaWindow : Window
         PositionBottomRight();
     }
 
-    // --- status strip -----------------------------------------------------
+    // --- CLI trouble ------------------------------------------------------
 
+    /// <summary>
+    /// Says something only when the CLI needs the user to act.
+    ///
+    /// There used to be a permanent strip reading "Claude Code — linked", which
+    /// spent the whole session telling the user something that was true and
+    /// that they could do nothing with, in a bar that has no room to spare.
+    /// A problem is worth interrupting for; working is not.
+    /// </summary>
     private void ShowCliStatus(CliStatus status)
     {
-        CliStatusDot.Fill = status.Readiness switch
+        if (status.Readiness is CliReadiness.Ready or CliReadiness.Unknown) return;
+        if (status.Readiness == _lastReportedReadiness) return;
+        _lastReportedReadiness = status.Readiness;
+
+        var message = status.Readiness switch
         {
-            CliReadiness.Ready => DotReady,
-            CliReadiness.NeedsSignIn => DotAttention,
-            CliReadiness.NotInstalled => DotAttention,
-            CliReadiness.RuntimeMissing => DotProblem,
-            _ => DotUnknown,
+            CliReadiness.NeedsSignIn => $"Sign in to {status.Provider.DisplayName} to link it.",
+            CliReadiness.NotInstalled => $"{status.Provider.DisplayName} is not installed — open settings to install it.",
+            CliReadiness.RuntimeMissing => status.Detail,
+            _ => null,
         };
 
-        CliStatusText.Text = status.Readiness switch
-        {
-            CliReadiness.Ready => $"{status.Provider.DisplayName} — linked",
-            CliReadiness.NeedsSignIn => $"{status.Provider.DisplayName} — sign in to link",
-            CliReadiness.NotInstalled => $"{status.Provider.DisplayName} — click to install",
-            CliReadiness.RuntimeMissing => status.Detail,
-            _ => $"{status.Provider.DisplayName} — checking…",
-        };
+        if (message is null) return;
+        Show();
+        PostToWeb(new { type = "toast", text = message });
     }
 
     private void ShowStandbyState(StandbyUiState state)
@@ -310,13 +319,8 @@ public partial class PersonaWindow : Window
     private void OnBarDragStart(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;
-        _draggingBar = true;
         try { DragMove(); }
-        finally
-        {
-            _draggingBar = false;
-            SnapToNearestEdge();
-        }
+        finally { SnapToNearestEdge(); }
     }
 
     private void SnapToNearestEdge()
@@ -360,12 +364,6 @@ public partial class PersonaWindow : Window
 
     private void OnOpenSettings(object sender, RoutedEventArgs e) =>
         (Application.Current as App)?.ShowSettings();
-
-    private void OnCliStripClick(object sender, MouseButtonEventArgs e)
-    {
-        if (_draggingBar) return;
-        (Application.Current as App)?.ShowSettings(SettingsWindow.AgentTab);
-    }
 
     // --- push to talk -----------------------------------------------------
 

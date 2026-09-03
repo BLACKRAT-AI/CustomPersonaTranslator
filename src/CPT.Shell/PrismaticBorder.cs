@@ -28,8 +28,11 @@ namespace CPT.Shell;
 /// </summary>
 internal sealed class PrismaticBorder : FrameworkElement
 {
-    /// <summary>Segments around the perimeter. SYNTAX uses 48 stops; the same reads smooth here.</summary>
-    private const int Segments = 160;
+    /// <summary>
+    /// Segments around the perimeter. High enough that the corner arcs read as
+    /// arcs: at 160 a 14px corner got two segments and looked chamfered.
+    /// </summary>
+    private const int Segments = 420;
 
     /// <summary>Frame cap. A slowly spinning blurred ring does not need 60fps.</summary>
     private static readonly TimeSpan FrameInterval = TimeSpan.FromSeconds(1.0 / 18);

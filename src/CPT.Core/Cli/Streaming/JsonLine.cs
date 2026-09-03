@@ -42,6 +42,17 @@ internal static class JsonLine
             ? value.GetString()
             : null;
 
+    /// <summary>
+    /// A boolean property, false when absent or not a boolean.
+    ///
+    /// Used for the flags a CLI puts on an envelope to say "this message is an
+    /// error", which matter because the text itself looks like an ordinary
+    /// reply and would otherwise be spoken as one.
+    /// </summary>
+    public static bool BoolOrDefault(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var value)
+        && value.ValueKind == JsonValueKind.True;
+
     /// <summary>The first of <paramref name="propertyNames"/> present as a non-empty string.</summary>
     public static string? FirstStringOrNull(JsonElement element, params string[] propertyNames)
     {
