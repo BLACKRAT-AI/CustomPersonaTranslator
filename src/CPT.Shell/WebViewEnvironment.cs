@@ -44,4 +44,41 @@ internal static class WebViewEnvironment
 
         return CoreWebView2Environment.CreateAsync(null, userDataFolder, options);
     }
+
+    /// <summary>
+    /// Drops the browser cache when the app's own build has changed.
+    ///
+    /// The hologram is served from a virtual host, so WebView2 caches it like
+    /// any web page: after a rebuild it can happily keep showing the previous
+    /// version of the page, which looks exactly like the developer failing to
+    /// rebuild. Keyed on the executable's build time, so it costs nothing on an
+    /// ordinary launch and always fires on a new build.
+    /// </summary>
+    public static async Task ClearCacheIfBuildChangedAsync(CoreWebView2 webView)
+    {
+        var stampFile = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "CustomPersonaTranslator", "WebView2", "build.stamp");
+
+        string stamp;
+        try
+        {
+            stamp = File.GetLastWriteTimeUtc(
+                Path.Combine(AppContext.BaseDirectory, "HologramWeb", "hologram.js")).Ticks.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch (IOException) { return; }
+
+        try
+        {
+            if (File.Exists(stampFile) && File.ReadAllText(stampFile) == stamp) return;
+
+            await webView.Profile.ClearBrowsingDataAsync(CoreWebView2BrowsingDataKinds.DiskCache)
+                .ConfigureAwait(true);
+            File.WriteAllText(stampFile, stamp);
+        }
+        catch (IOException) { /* a stamp we cannot write just means we clear again next time */ }
+        catch (UnauthorizedAccessException) { }
+    }
+
 }

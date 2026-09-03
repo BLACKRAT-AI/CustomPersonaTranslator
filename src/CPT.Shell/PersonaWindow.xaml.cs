@@ -95,6 +95,7 @@ public partial class PersonaWindow : Window
         Web.CoreWebView2.Settings.AreDevToolsEnabled = false;
         Web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
         Web.CoreWebView2.WebMessageReceived += OnWebMessage;
+        await WebViewEnvironment.ClearCacheIfBuildChangedAsync(Web.CoreWebView2).ConfigureAwait(true);
 
         // Served over a virtual host, not file://. The page is ES modules and
         // fetches the head's point cloud; both are blocked on a file: origin.
