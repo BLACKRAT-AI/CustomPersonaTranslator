@@ -28,12 +28,16 @@ public sealed partial class YoutubeAudio
 {
     private static readonly TimeSpan MetadataTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan DownloadTimeout = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan UpdateTimeout = TimeSpan.FromMinutes(5);
 
     private static readonly string[] CommonArguments =
         ["--no-warnings", "--no-playlist", "--retries", "5", "--fragment-retries", "5"];
 
     private readonly string _ytDlp;
     private readonly string _ffmpeg;
+
+    /// <summary>One self-update attempt per instance, so a real failure cannot loop.</summary>
+    private bool _updateAttempted;
 
     public YoutubeAudio(string ytDlpPath, string ffmpegPath)
     {
@@ -123,6 +127,23 @@ public sealed partial class YoutubeAudio
 
         progress?.Report("Downloading audio…");
         var failure = await RunWithProgressAsync(arguments, progress, cancellationToken).ConfigureAwait(false);
+
+        // YouTube changes how it serves media every few weeks, and an out-of-date
+        // yt-dlp starts failing with 403s and format errors that look like a
+        // problem with the video. Updating and retrying once turns the single
+        // most common failure into a pause rather than a dead end.
+        if (failure is not null && LooksLikeStaleTool(failure) && !_updateAttempted)
+        {
+            _updateAttempted = true;
+            progress?.Report("YouTube changed something — updating yt-dlp…");
+
+            if (await UpdateAsync(progress, cancellationToken).ConfigureAwait(false))
+            {
+                progress?.Report("Retrying the download…");
+                failure = await RunWithProgressAsync(arguments, progress, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
         if (failure is not null)
         {
             TryDeleteDirectory(workDirectory);
@@ -138,6 +159,59 @@ public sealed partial class YoutubeAudio
 
         progress?.Report("Audio ready.");
         return wav;
+    }
+
+    /// <summary>
+    /// True for failures that an out-of-date yt-dlp characteristically produces.
+    ///
+    /// These all read like a problem with the video -- forbidden, no such format,
+    /// sign in to continue -- but in practice they mean YouTube changed how it
+    /// serves media and the local binary has not caught up.
+    /// </summary>
+    internal static bool LooksLikeStaleTool(string failure)
+    {
+        ReadOnlySpan<string> symptoms =
+        [
+            "403",
+            "unable to download video data",
+            "sign in to confirm",
+            "requested format is not available",
+            "nsig extraction failed",
+            "unable to extract",
+            "precondition check failed",
+            "please report this issue",
+        ];
+
+        foreach (var symptom in symptoms)
+        {
+            if (failure.Contains(symptom, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Runs yt-dlp's own updater. Returns true when it reports a new version.
+    /// </summary>
+    public async Task<bool> UpdateAsync(
+        IProgress<string>? progress = null, CancellationToken cancellationToken = default)
+    {
+        var result = await ProcessLauncher.RunAsync(
+            _ytDlp, ["-U"], new ProcessRunOptions { Timeout = UpdateTimeout }, cancellationToken)
+            .ConfigureAwait(false);
+
+        var output = result.StandardOutput + result.StandardError;
+        CptLog.Write("[youtube] update: " + output.Trim().Replace('\n', ' '));
+
+        // The updater exits non-zero on some builds even after a successful
+        // update, so trust what it printed rather than the exit code.
+        var updated = output.Contains("Updated yt-dlp", StringComparison.OrdinalIgnoreCase);
+        if (updated) progress?.Report("Updated yt-dlp.");
+        else if (output.Contains("up to date", StringComparison.OrdinalIgnoreCase))
+            progress?.Report("yt-dlp is already current.");
+        else
+            progress?.Report("Could not update yt-dlp automatically.");
+
+        return updated;
     }
 
     /// <summary>Returns a failure description, or null on success.</summary>

@@ -172,6 +172,27 @@ public class YoutubeMetadataTests
         Assert.Null(YoutubeAudio.Parse(line));
     }
 
+    [Theory]
+    [InlineData("ERROR: unable to download video data: HTTP Error 403: Forbidden")]
+    [InlineData("ERROR: Sign in to confirm you're not a bot")]
+    [InlineData("ERROR: Requested format is not available")]
+    [InlineData("WARNING: nsig extraction failed")]
+    public void YouTube_side_blocks_are_recognised_as_a_stale_downloader(string failure)
+    {
+        // These read like a problem with the video, but they are what an
+        // out-of-date yt-dlp produces after YouTube changes how it serves media.
+        Assert.True(YoutubeAudio.LooksLikeStaleTool(failure));
+    }
+
+    [Theory]
+    [InlineData("ERROR: Video unavailable. This video is private")]
+    [InlineData("ERROR: Video unavailable")]
+    [InlineData("the download timed out")]
+    public void A_genuinely_unavailable_video_does_not_trigger_an_update(string failure)
+    {
+        Assert.False(YoutubeAudio.LooksLikeStaleTool(failure));
+    }
+
     [Fact]
     public void Download_percentages_become_a_status_line()
     {

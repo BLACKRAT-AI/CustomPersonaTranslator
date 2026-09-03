@@ -252,6 +252,22 @@
 
                             <TextBlock Text="PIPER VOICES FOLDER" Style="{StaticResource Caption}"/>
                             <TextBox x:Name="PiperModelsDir"/>
+
+                            <TextBlock Text="YOUTUBE DOWNLOADER" Style="{StaticResource Caption}"/>
+                            <TextBlock Style="{StaticResource Hint}"
+                                       TextWrapping="Wrap"
+                                       Text="YouTube changes how it serves video every few weeks. When a download fails, CPT updates this itself and retries — you can also do it here."/>
+                            <DockPanel Margin="0,6,0,0" LastChildFill="True">
+                                <Button DockPanel.Dock="Right"
+                                        Content="Update now"
+                                        Margin="8,0,0,0"
+                                        Click="OnUpdateYoutubeTool"/>
+                                <TextBlock x:Name="YtDlpState"
+                                           VerticalAlignment="Center"
+                                           FontSize="11"
+                                           Foreground="{StaticResource Muted}"
+                                           TextTrimming="CharacterEllipsis"/>
+                            </DockPanel>
                         </StackPanel>
                     </ScrollViewer>
                 </TabItem>

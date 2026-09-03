@@ -9,6 +9,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using CPT.Core.Cli;
 using CPT.Core.Diagnostics;
+using CPT.Core.Media;
 using CPT.Core.Models;
 using CPT.Core.Personas;
 using CPT.Shell.ViewModels;
@@ -126,6 +127,9 @@ public partial class SettingsWindow : Window
             : "Speech recognition is not set up — push-to-talk and standby need the two paths below.";
         PiperPath.Text = settings.PiperPath;
         PiperModelsDir.Text = settings.PiperModelsDir;
+        YtDlpState.Text = new YoutubeAudio(settings.YtDlpPath, settings.FfmpegPath).IsAvailable
+            ? "yt-dlp is installed."
+            : "yt-dlp was not found — run scripts/bootstrap.ps1.";
 
         GpuText.Text = "Detected GPU tier: " + _services.Gpu;
         LlamaExe.Text = settings.LlamaCppExe;
@@ -233,6 +237,24 @@ public partial class SettingsWindow : Window
     }
 
     private void OnCancel(object sender, RoutedEventArgs e) => Close();
+
+    private async void OnUpdateYoutubeTool(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button) return;
+
+        button.IsEnabled = false;
+        YtDlpState.Text = "Checking for a newer yt-dlp…";
+        try
+        {
+            var youtube = new YoutubeAudio(_services.Settings.YtDlpPath, _services.Settings.FfmpegPath);
+            await youtube.UpdateAsync(new Progress<string>(message => YtDlpState.Text = message))
+                .ConfigureAwait(true);
+        }
+        finally
+        {
+            button.IsEnabled = true;
+        }
+    }
 
     // --- agent ------------------------------------------------------------
 
