@@ -10,6 +10,29 @@
         Foreground="{StaticResource Text}"
         FontFamily="Segoe UI"
         WindowStartupLocation="CenterScreen">
+    <Window.Resources>
+        <!-- One picker per option the CLI declares: model, effort, thinking.
+             Shared, because an agent has two CLIs and both want the same UI. -->
+        <DataTemplate x:Key="CliOptionTemplate" DataType="{x:Type vm:CliOptionRow}">
+            <StackPanel Margin="0,8,0,0">
+                <TextBlock Text="{Binding Label}"
+                           FontSize="10"
+                           Foreground="{StaticResource Muted}"
+                           Margin="2,0,0,2"/>
+                <ComboBox ItemsSource="{Binding Choices}"
+                          SelectedValuePath="Id"
+                          SelectedValue="{Binding SelectedId, Mode=TwoWay}"
+                          ToolTip="{Binding Hint}">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Label}"/>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+            </StackPanel>
+        </DataTemplate>
+    </Window.Resources>
+
 
     <!--
         Everything the app can do lives in this one window. Panes such as the CLI
@@ -69,67 +92,95 @@
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                             <ListBox.ItemTemplate>
                                 <DataTemplate DataType="{x:Type vm:AgentRow}">
-                                    <Grid Margin="4,7">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/>
-                                        </Grid.RowDefinitions>
+                                    <StackPanel Margin="4,8">
 
-                                        <TextBox Grid.Row="0" Grid.Column="0"
-                                                 Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
-                                                 FontSize="13"
-                                                 ToolTip="What you call this agent"/>
+                                        <!-- Name, and what to do with this agent. -->
+                                        <DockPanel LastChildFill="True">
+                                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="8,0,0,0">
+                                                <Button Content="Use" Padding="12,4" Click="OnUseAgent"/>
+                                                <Button Content="Delete" Padding="12,4" Click="OnDeleteAgent"/>
+                                            </StackPanel>
+                                            <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
+                                                     FontSize="13"
+                                                     local:Placeholder.Text="what you call this agent"/>
+                                        </DockPanel>
 
-                                        <StackPanel Grid.Row="0" Grid.Column="1"
-                                                    Orientation="Horizontal" Margin="8,0,0,0">
-                                            <Button Content="Use" Padding="12,4" Click="OnUseAgent"/>
-                                            <Button Content="Delete" Padding="12,4" Click="OnDeleteAgent"/>
-                                        </StackPanel>
-
-                                        <Grid Grid.Row="1" Grid.ColumnSpan="2" Margin="0,6,0,0">
+                                        <!-- Two halves: who answers, and who speaks. -->
+                                        <Grid Margin="0,10,0,0">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="*"/>
                                             </Grid.ColumnDefinitions>
-                                            <ComboBox Grid.Column="0"
-                                                      Margin="0,0,4,0"
-                                                      ItemsSource="{Binding Providers}"
-                                                      SelectedValuePath="Id"
-                                                      SelectedValue="{Binding ProviderId, Mode=TwoWay}"
-                                                      ToolTip="Which coding CLI runs this agent's turns">
-                                                <ComboBox.ItemTemplate>
-                                                    <DataTemplate>
-                                                        <TextBlock Text="{Binding DisplayName}"/>
-                                                    </DataTemplate>
-                                                </ComboBox.ItemTemplate>
-                                            </ComboBox>
-                                            <ComboBox Grid.Column="1"
-                                                      Margin="4,0,0,0"
-                                                      ItemsSource="{Binding Personas}"
-                                                      SelectedValuePath="Id"
-                                                      SelectedValue="{Binding PersonaId, Mode=TwoWay}"
-                                                      ToolTip="Whose voice and manner the reply is spoken in">
-                                                <!-- An explicit ItemTemplate, not DisplayMemberPath: the
-                                                     retemplated ComboBox renders the closed box through
-                                                     SelectionBoxItemTemplate, and the template WPF
-                                                     generates from DisplayMemberPath does not reach it,
-                                                     so the box fell back to ToString() and showed
-                                                     "CPT.Core.Models.Persona". -->
-                                                <ComboBox.ItemTemplate>
-                                                    <DataTemplate>
-                                                        <TextBlock Text="{Binding Name}"/>
-                                                    </DataTemplate>
-                                                </ComboBox.ItemTemplate>
-                                            </ComboBox>
+
+                                            <!-- ANSWERS: the agent's own CLI and how it runs. -->
+                                            <Border Grid.Column="0"
+                                                    Margin="0,0,5,0"
+                                                    Padding="10,8,10,10"
+                                                    CornerRadius="7"
+                                                    Background="#14FFFFFF">
+                                                <StackPanel>
+                                                    <TextBlock Text="ANSWERS" Style="{StaticResource Caption}" Margin="0,0,0,5"/>
+                                                    <ComboBox ItemsSource="{Binding Providers}"
+                                                              SelectedValuePath="Id"
+                                                              SelectedValue="{Binding ProviderId, Mode=TwoWay}"
+                                                              ToolTip="Which coding CLI runs this agent's turns">
+                                                        <ComboBox.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <TextBlock Text="{Binding DisplayName}"/>
+                                                            </DataTemplate>
+                                                        </ComboBox.ItemTemplate>
+                                                    </ComboBox>
+
+                                                    <ItemsControl ItemsSource="{Binding Options}"
+                                                                  ItemTemplate="{StaticResource CliOptionTemplate}"/>
+                                                </StackPanel>
+                                            </Border>
+
+                                            <!-- SPEAKS AS: the persona, and the CLI that phrases it. -->
+                                            <Border Grid.Column="1"
+                                                    Margin="5,0,0,0"
+                                                    Padding="10,8,10,10"
+                                                    CornerRadius="7"
+                                                    Background="#14FFFFFF">
+                                                <StackPanel>
+                                                    <TextBlock Text="SPEAKS AS" Style="{StaticResource Caption}" Margin="0,0,0,5"/>
+                                                    <!-- An explicit ItemTemplate, not DisplayMemberPath: the
+                                                         retemplated ComboBox renders its closed box through
+                                                         SelectionBoxItemTemplate, which the template WPF
+                                                         generates from DisplayMemberPath never reaches, so
+                                                         the box falls back to ToString(). -->
+                                                    <ComboBox ItemsSource="{Binding Personas}"
+                                                              SelectedValuePath="Id"
+                                                              SelectedValue="{Binding PersonaId, Mode=TwoWay}"
+                                                              ToolTip="Whose voice and manner the reply is spoken in">
+                                                        <ComboBox.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <TextBlock Text="{Binding Name}"/>
+                                                            </DataTemplate>
+                                                        </ComboBox.ItemTemplate>
+                                                    </ComboBox>
+
+                                                    <TextBlock Text="phrased by"
+                                                               Style="{StaticResource Hint}"
+                                                               Margin="2,8,0,2"/>
+                                                    <ComboBox ItemsSource="{Binding Providers}"
+                                                              SelectedValuePath="Id"
+                                                              SelectedValue="{Binding RewriteProviderId, Mode=TwoWay}"
+                                                              ToolTip="The CLI that rephrases the answer in this persona's voice. Use the cheapest model, it runs on every reply.">
+                                                        <ComboBox.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <TextBlock Text="{Binding DisplayName}"/>
+                                                            </DataTemplate>
+                                                        </ComboBox.ItemTemplate>
+                                                    </ComboBox>
+
+                                                    <ItemsControl ItemsSource="{Binding RewriteOptions}"
+                                                                  ItemTemplate="{StaticResource CliOptionTemplate}"/>
+                                                </StackPanel>
+                                            </Border>
                                         </Grid>
 
-                                        <DockPanel Grid.Row="2" Grid.ColumnSpan="2" Margin="0,6,0,0">
+                                        <DockPanel Margin="0,10,0,0">
                                             <TextBlock DockPanel.Dock="Left"
                                                        Text="Trigger phrase"
                                                        VerticalAlignment="Center"
@@ -137,10 +188,11 @@
                                                        FontSize="11"
                                                        Foreground="{StaticResource Muted}"/>
                                             <TextBox Text="{Binding TriggerPhrase, UpdateSourceTrigger=PropertyChanged}"
-                                                     local:Placeholder.Text="say this before a question, e.g. “ask claude”"
+                                                     local:Placeholder.Text="say this before a question, e.g. ask claude"
                                                      ToolTip="Spoken before a question to send it to this agent"/>
                                         </DockPanel>
-                                        <DockPanel Grid.Row="3" Grid.ColumnSpan="2" Margin="0,7,0,0">
+
+                                        <DockPanel Margin="0,7,0,0">
                                             <Button DockPanel.Dock="Right"
                                                     Content="Fix"
                                                     Padding="12,3"
@@ -154,7 +206,7 @@
                                                        TextTrimming="CharacterEllipsis"
                                                        Foreground="{StaticResource Muted}"/>
                                         </DockPanel>
-                                    </Grid>
+                                    </StackPanel>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                         </ListBox>
@@ -301,54 +353,6 @@
                                       Content="Remember the conversation between requests"/>
                             <CheckBox x:Name="CliAutoSetup"
                                       Content="Set up the selected CLI automatically on startup"/>
-                            <!-- ===== The persona voice's own CLI ===== -->
-                            <TextBlock Text="PERSONA VOICE" Style="{StaticResource Caption}" Margin="0,26,0,0"/>
-                            <TextBlock Style="{StaticResource Hint}" TextWrapping="Wrap">
-                                Which CLI restates the agent's answer in the persona's voice. Use the cheapest,
-                                fastest model here — it is only rephrasing a few sentences, and it runs on every
-                                reply.
-                            </TextBlock>
-
-                            <ComboBox x:Name="RewriteProvider"
-                                      Margin="0,8,0,0"
-                                      SelectedValuePath="Id"
-                                      SelectionChanged="OnRewriteProviderChanged"
-                                      ToolTip="The CLI that rephrases replies">
-                                <ComboBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding DisplayName}"/>
-                                    </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
-
-                            <ItemsControl x:Name="RewriteOptions" Margin="0,6,0,0">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <StackPanel Margin="0,10,0,0">
-                                            <TextBlock Text="{Binding Label}" Style="{StaticResource Caption}"/>
-                                            <TextBlock Text="{Binding Hint}"
-                                                       Style="{StaticResource Hint}"
-                                                       Visibility="{Binding HintVisibility}"/>
-                                            <ComboBox ItemsSource="{Binding Choices}"
-                                                      SelectedValuePath="Id"
-                                                      SelectedValue="{Binding SelectedId, Mode=TwoWay}">
-                                                <ComboBox.ItemTemplate>
-                                                    <DataTemplate>
-                                                        <TextBlock Text="{Binding Label}"/>
-                                                    </DataTemplate>
-                                                </ComboBox.ItemTemplate>
-                                            </ComboBox>
-                                        </StackPanel>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-
-                            <TextBlock x:Name="NoRewriteOptionsNote"
-                                       Style="{StaticResource Hint}"
-                                       Margin="0,12,0,0"
-                                       Visibility="Collapsed"
-                                       Text="This CLI exposes no per-turn options."/>
-
                             <TextBlock Text="WORKING FOLDER" Style="{StaticResource Caption}"/>
                             <TextBlock Style="{StaticResource Hint}" Text="Blank uses your user folder."/>
                             <TextBox x:Name="CliWorkingDirectory"/>

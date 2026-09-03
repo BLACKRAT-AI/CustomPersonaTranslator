@@ -25,6 +25,26 @@ public sealed class AgentProfile
     /// <summary>Provider id from the CLI catalog, e.g. "claude-code".</summary>
     public string ProviderId { get; set; } = "claude-code";
 
+    /// <summary>
+    /// This agent's per-turn choices for its CLI: model, effort, thinking.
+    /// Keyed by option id, exactly as the catalog declares them.
+    /// </summary>
+    public Dictionary<string, string> Options { get; set; } = [];
+
+    /// <summary>
+    /// The CLI that restates this agent's answers in its persona's voice, and
+    /// its own per-turn choices.
+    ///
+    /// Separate from the agent's CLI because the two jobs want opposite things:
+    /// the agent should be the strongest model available, and rephrasing three
+    /// sentences on every single reply should be the cheapest. Empty follows
+    /// the agent's own CLI.
+    /// </summary>
+    public string RewriteProviderId { get; set; } = "";
+
+    public Dictionary<string, string> RewriteOptions { get; set; } = [];
+
+
     /// <summary>Persona id supplying the voice and manner of the reply.</summary>
     public string PersonaId { get; set; } = "";
 

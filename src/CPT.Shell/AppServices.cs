@@ -124,8 +124,10 @@ public sealed class AppServices : IDisposable
 
         Cli = new CliOrchestrator(Settings.Cli.ProviderId, Settings.ResolveCliWorkingDirectory());
         Cli.StatusChanged += status => OnCliStatusChanged?.Invoke(status);
-        ApplyCliOptions();
-        ApplyRewriteOptions();
+        // An agent, if there is one, owns all of this; these are the fallback
+        // for a machine with none configured yet.
+        if (Settings.Agents.Active is { } startupAgent) ApplyAgentCli(startupAgent);
+        else { ApplyCliOptions(); ApplyRewriteOptions(); }
 
         WarmCloneIfActivePersonaNeedsIt();
     }
@@ -416,7 +418,13 @@ public sealed class AppServices : IDisposable
         OnAgentsChanged?.Invoke();
     }
 
-    /// <summary>Points the CLI orchestrator at this agent's provider and directory.</summary>
+    /// <summary>
+    /// Points both orchestrators at this agent's choices.
+    ///
+    /// Both, because an agent owns the whole pipeline: which CLI answers and on
+    /// what model, and which CLI phrases the answer and on what model. They used
+    /// to be global, so two agents could not differ in anything but name.
+    /// </summary>
     private void ApplyAgentCli(AgentProfile agent)
     {
         var directory = string.IsNullOrWhiteSpace(agent.WorkingDirectory)
@@ -424,7 +432,16 @@ public sealed class AppServices : IDisposable
             : agent.WorkingDirectory;
 
         Cli.Select(agent.ProviderId, directory);
-        ApplyCliOptions();
+        Cli.Options = agent.Options;
+
+        var rewriteProvider = string.IsNullOrWhiteSpace(agent.RewriteProviderId)
+            ? agent.ProviderId
+            : agent.RewriteProviderId;
+
+        RewriteCli.Select(rewriteProvider, directory);
+        RewriteCli.Options = agent.RewriteOptions;
+
+        CptLog.Write($"[agent] {agent.Name}: answers on {agent.ProviderId}, speaks via {rewriteProvider}");
     }
 
     /// <summary>Re-reads the agent list after it has been edited in settings.</summary>

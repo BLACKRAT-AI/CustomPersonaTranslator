@@ -68,7 +68,7 @@ public static class Program
                 failures += Check(name, () => Realize(make()));
 
             failures += CheckAgentPersonaPicker(services);
-            failures += CheckRewriteOptions(services);
+
         }
         finally
         {
@@ -256,10 +256,23 @@ public static class Program
                 failures++;
             }
 
+            // Both halves of the tile: the agent's own CLI options and the
+            // persona voice's. The whole point of moving them here is that two
+            // agents can differ, so a tile that shows none is the bug.
+            var optionBoxes = combos.Count(c => c.SelectedValuePath == "Id" && c.Items.Count > 0
+                                                && c.Items[0] is CliOptionChoice);
+            var declared = CliProviderCatalog.Find(agent.ProviderId)?.Options.Count ?? 0;
+            if (declared > 0 && optionBoxes < declared * 2)
+            {
+                Console.WriteLine($"FAIL  agent tile: {optionBoxes} option pickers, expected {declared * 2}"
+                    + " (model, effort and thinking for both CLIs)");
+                failures++;
+            }
+
             window.Close();
             Console.WriteLine(failures == 0
-                ? $"ok    agent persona picker ({picker.Items.Count} personas, selection stuck)"
-                : "FAIL  agent persona picker");
+                ? $"ok    agent tile ({picker.Items.Count} personas, {optionBoxes} option pickers, selection stuck)"
+                : "FAIL  agent tile");
             return failures;
         }
         finally
@@ -273,42 +286,6 @@ public static class Program
     }
 
 
-    /// <summary>
-    /// Checks the persona voice's own option list is actually populated.
-    ///
-    /// Same failure as the persona picker and found the same way: the tab was
-    /// never loaded, so the UI said the CLI exposed no options when it exposes
-    /// several.
-    /// </summary>
-    private static int CheckRewriteOptions(AppServices services)
-    {
-        var window = new SettingsWindow(services)
-        {
-            WindowStartupLocation = WindowStartupLocation.Manual,
-            Left = -30000,
-            Top = -30000,
-        };
-        window.Measure(new Size(1200, 900));
-        window.Arrange(new Rect(0, 0, 1200, 900));
-        window.UpdateLayout();
-
-        var provider = FindByName<ComboBox>(window, "RewriteProvider");
-        var options = FindByName<ItemsControl>(window, "RewriteOptions");
-        var expected = CliOrchestrator.AvailableProviders
-            .FirstOrDefault(p => p.Id == (string?)provider?.SelectedValue)?.Options.Count ?? 0;
-
-        var actual = options?.Items.Count ?? -1;
-        window.Close();
-
-        if (provider?.SelectedValue is null || actual != expected)
-        {
-            Console.WriteLine($"FAIL  persona voice options: {actual} shown, {expected} expected");
-            return 1;
-        }
-
-        Console.WriteLine($"ok    persona voice options ({actual} for {provider.SelectedValue})");
-        return 0;
-    }
 
     /// <summary>
     /// The text a closed ComboBox is showing, read out of its visual tree.

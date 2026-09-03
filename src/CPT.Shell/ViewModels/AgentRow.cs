@@ -1,5 +1,8 @@
-using System.Windows;
+using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.Linq;
+using System.Windows;
 using CPT.Core.Agents;
 using CPT.Core.Cli;
 using CPT.Core.Models;
@@ -7,11 +10,16 @@ using CPT.Core.Models;
 namespace CPT.Shell.ViewModels;
 
 /// <summary>
-/// One agent as edited in settings.
+/// One agent as edited in settings: everything it is, in one tile.
 ///
-/// The row writes straight through to the <see cref="AgentProfile"/> it wraps,
-/// so there is no Save button to forget: typing a phrase or picking a persona
-/// is the change. The settings window persists on close and on every edit.
+/// An agent is a complete unit -- which CLI answers, on what model and at what
+/// effort; whose voice it answers in; which CLI does the rephrasing and on what
+/// model; and what to say to summon it. Splitting those across tabs meant
+/// picking an agent in one place and its settings in another, with no way to
+/// give two agents different models at all.
+///
+/// The row writes straight through to the profile it wraps, so there is no Save
+/// button to forget.
 /// </summary>
 public sealed class AgentRow : ObservableObject
 {
@@ -22,6 +30,9 @@ public sealed class AgentRow : ObservableObject
         _agent = agent;
         Providers = providers;
         Personas = personas;
+
+        BuildOptions();
+        BuildRewriteOptions();
     }
 
     /// <summary>The profile this row edits.</summary>
@@ -29,6 +40,12 @@ public sealed class AgentRow : ObservableObject
 
     public IReadOnlyList<CliProvider> Providers { get; }
     public IReadOnlyList<Persona> Personas { get; }
+
+    /// <summary>Per-turn choices for the agent's own CLI.</summary>
+    public ObservableCollection<CliOptionRow> Options { get; } = [];
+
+    /// <summary>Per-turn choices for the CLI that speaks in the persona's voice.</summary>
+    public ObservableCollection<CliOptionRow> RewriteOptions { get; } = [];
 
     public string Name
     {
@@ -42,14 +59,12 @@ public sealed class AgentRow : ObservableObject
         set { _agent.TriggerPhrase = value; Raise(); RefreshSetup(); }
     }
 
-
     /// <summary>
     /// The chosen ids, and what the pickers bind to.
     ///
-    /// Bound by ID rather than by instance: a ComboBox inside a DataTemplate
-    /// can have SelectedItem applied before ItemsSource, and an item that is
-    /// not in the (still empty) list makes WPF clear the selection — which is
-    /// why the persona picker came up blank however many times it was set.
+    /// Bound by ID rather than by instance: a ComboBox inside a DataTemplate can
+    /// have SelectedItem applied before ItemsSource, and an item that is not in
+    /// the still-empty list makes WPF clear the selection.
     /// </summary>
     public string ProviderId
     {
@@ -58,6 +73,10 @@ public sealed class AgentRow : ObservableObject
         {
             if (string.IsNullOrEmpty(value) || value == _agent.ProviderId) return;
             _agent.ProviderId = value;
+            // A different CLI declares different options, so the old choices
+            // are meaningless against it.
+            _agent.Options.Clear();
+            BuildOptions();
             Raise();
             RefreshSetup();
         }
@@ -74,42 +93,25 @@ public sealed class AgentRow : ObservableObject
             RefreshSetup();
         }
     }
-    public CliProvider? Provider
-    {
-        get => CliProviderCatalog.Find(_agent.ProviderId);
-        set
-        {
-            if (value is null) return;
-            _agent.ProviderId = value.Id;
-            RefreshSetup();
-            Raise();
-        }
-    }
-
-    public Persona? Persona
-    {
-        get
-        {
-            foreach (var persona in Personas)
-                if (persona.Id == _agent.PersonaId) return persona;
-            return null;
-        }
-        set
-        {
-            if (value is null) return;
-            _agent.PersonaId = value.Id;
-            RefreshSetup();
-            Raise();
-        }
-    }
 
     /// <summary>
-    /// What this agent still needs before it can answer, in plain words.
-    ///
-    /// An agent is a pair, and a half-made pair fails at the moment it is
-    /// spoken to rather than at the moment it is made. The row says which half
-    /// is missing while the user is still looking at it.
+    /// The rewrite CLI. "" means "the same one the agent uses", which is the
+    /// sensible default: it is installed and signed in by definition.
     /// </summary>
+    public string RewriteProviderId
+    {
+        get => _agent.RewriteProviderId.Length == 0 ? _agent.ProviderId : _agent.RewriteProviderId;
+        set
+        {
+            if (string.IsNullOrEmpty(value) || value == RewriteProviderId) return;
+            _agent.RewriteProviderId = value;
+            _agent.RewriteOptions.Clear();
+            BuildRewriteOptions();
+            Raise();
+        }
+    }
+
+    /// <summary>What this agent still needs before it can answer, in plain words.</summary>
     public string SetupHint
     {
         get
@@ -134,10 +136,39 @@ public sealed class AgentRow : ObservableObject
     /// <summary>True when this agent's CLI is installed and signed in.</summary>
     public bool CliReady { get; set; }
 
+    public CliProvider? Provider => CliProviderCatalog.Find(_agent.ProviderId);
+
+    public Persona? Persona => Personas.FirstOrDefault(p => p.Id == _agent.PersonaId);
+
     /// <summary>Re-reads everything the row shows about setup state.</summary>
     public void RefreshSetup()
     {
         Raise(nameof(SetupHint));
         Raise(nameof(SetupVisibility));
+    }
+
+    private void BuildOptions() =>
+        Fill(Options, CliProviderCatalog.Find(_agent.ProviderId), _agent.Options);
+
+    private void BuildRewriteOptions() =>
+        Fill(RewriteOptions, CliProviderCatalog.Find(RewriteProviderId), _agent.RewriteOptions);
+
+    /// <summary>
+    /// Builds pickers for whatever the provider declares, writing each choice
+    /// straight back into the profile as it is made.
+    /// </summary>
+    private static void Fill(
+        ObservableCollection<CliOptionRow> rows, CliProvider? provider, Dictionary<string, string> stored)
+    {
+        rows.Clear();
+        if (provider is null) return;
+
+        foreach (var option in provider.Options)
+        {
+            stored.TryGetValue(option.Id, out var choiceId);
+            var row = new CliOptionRow(option, choiceId);
+            row.PropertyChanged += (_, _) => stored[option.Id] = row.SelectedId;
+            rows.Add(row);
+        }
     }
 }
