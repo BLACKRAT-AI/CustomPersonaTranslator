@@ -68,6 +68,10 @@ public sealed class AppServices : IDisposable
     public event Action<float>? OnAudioLevel;
     public event Action? OnTranslationDone;
 
+    /// <summary>True while a request is out with the CLI and no reply has been
+    /// spoken yet. Drives the spinner, so waiting looks like waiting.</summary>
+    public event Action<bool>? OnAgentBusy;
+
     /// <summary>Brief user-visible status, shown as a toast on the hologram.</summary>
     public event Action<string>? OnNotification;
 
@@ -190,6 +194,7 @@ public sealed class AppServices : IDisposable
         await _agentTurnLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            OnAgentBusy?.Invoke(true);
             if (!Settings.Cli.KeepConversationContext) Cli.ResetConversation();
 
             var reply = new StringBuilder();
@@ -223,6 +228,7 @@ public sealed class AppServices : IDisposable
         }
         finally
         {
+            OnAgentBusy?.Invoke(false);
             _agentTurnLock.Release();
         }
     }

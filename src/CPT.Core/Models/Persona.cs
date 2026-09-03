@@ -44,7 +44,8 @@ public sealed class VoiceConfig
 public sealed class VisualConfig
 {
     public string? ImageFile { get; set; }
-    public string HologramColor { get; set; } = "#22d3ee";
+    /// <summary>Persona colour, or "prismatic" for the full spectrum sweep.</summary>
+    public string HologramColor { get; set; } = "prismatic";
     public float GlitchIntensity { get; set; } = 0.5f;
     public string WaveformStyle { get; set; } = "bars";
     public string IdleAnimation { get; set; } = "breathe";

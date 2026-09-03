@@ -371,7 +371,7 @@ public sealed partial class PersonaEditorView : SettingsPage
                 VoiceEngine = useClone ? "chatterbox" : "piper",
                 VoiceRef = voiceId,
                 ImageFile = string.IsNullOrWhiteSpace(ImageFileBox.Text) ? null : ImageFileBox.Text,
-                HologramColor = string.IsNullOrWhiteSpace(ColorBox.Text) ? "#22d3ee" : ColorBox.Text!.Trim(),
+                HologramColor = string.IsNullOrWhiteSpace(ColorBox.Text) ? "prismatic" : ColorBox.Text!.Trim(),
                 IoProviders = BuildIoProviders(),
                 ShowTranscriptPanel = TranscriptPanel.IsChecked == true,
 

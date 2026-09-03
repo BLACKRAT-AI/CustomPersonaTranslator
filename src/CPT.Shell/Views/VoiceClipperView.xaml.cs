@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
@@ -52,6 +53,13 @@ public sealed partial class VoiceClipperView : SettingsPage, IDisposable
     private bool _busy;
     private bool _shortSampleAccepted;
 
+    /// <summary>
+    /// Set while a video is loading. Loading clears the marks before restoring
+    /// them, and saving that empty moment would destroy the very work being
+    /// restored if the load then failed.
+    /// </summary>
+    private bool _suppressSessionSave;
+
     public VoiceClipperView(AppServices services)
     {
         InitializeComponent();
@@ -67,7 +75,37 @@ public sealed partial class VoiceClipperView : SettingsPage, IDisposable
         if (!_youtube.IsAvailable)
             SetStatus("yt-dlp was not found — run scripts/bootstrap.ps1, or set its path in Settings.");
 
-        Loaded += async (_, _) => await InitialiseVideoPaneAsync().ConfigureAwait(true);
+        Loaded += async (_, _) =>
+        {
+            await InitialiseVideoPaneAsync().ConfigureAwait(true);
+            await RestoreLastSessionAsync().ConfigureAwait(true);
+        };
+    }
+
+    /// <summary>
+    /// Brings back the video and the marks from the last time the picker was
+    /// used, so a failed download or a closed pane does not cost the user all
+    /// the marking they had done.
+    /// </summary>
+    private async Task RestoreLastSessionAsync()
+    {
+        if (VoiceClipSession.Load() is not { } session) return;
+
+        UrlBox.Text = session.Url;
+        var restored = session.ToClips();
+
+        await LoadAsync(restored).ConfigureAwait(true);
+
+        if (_video is not null && _clips.Count > 0)
+            SetStatus($"Restored {_clips.Count} clip{(_clips.Count == 1 ? "" : "s")} from last time.");
+    }
+
+    /// <summary>Writes the current video and marks to disk.</summary>
+    private void SaveSession()
+    {
+        if (_suppressSessionSave) return;
+        if (_video is null && UrlBox.Text.Trim().Length == 0) return;
+        VoiceClipSession.From(UrlBox.Text.Trim(), _video?.Title ?? "", _clips).Save();
     }
 
     /// <summary>Path of the WAV built from the marked clips, once the user accepts.</summary>
@@ -201,13 +239,18 @@ public sealed partial class VoiceClipperView : SettingsPage, IDisposable
         await LoadAsync().ConfigureAwait(true);
     }
 
-    private async Task LoadAsync()
+    /// <param name="restoreClips">
+    /// Marks to put back once the video's length is known, when reopening a saved
+    /// session. A fresh Load starts with none.
+    /// </param>
+    private async Task LoadAsync(IReadOnlyList<VoiceClip>? restoreClips = null)
     {
         var url = UrlBox.Text.Trim();
         if (url.Length == 0) return;
         if (_busy) return;
 
         SetBusy(true, "Reading the video…");
+        _suppressSessionSave = true;
         try
         {
             _video = await _youtube.GetInfoAsync(url, _closing.Token).ConfigureAwait(true);
@@ -217,6 +260,10 @@ public sealed partial class VoiceClipperView : SettingsPage, IDisposable
             _pendingStart = null;
             SetDuration(_video.Duration);
             SetPosition(TimeSpan.Zero);
+
+            // Restore only after the duration is known, so the marks are clamped
+            // against the real video rather than a zero-length one.
+            if (restoreClips is { Count: > 0 }) ReplaceClips(restoreClips);
 
             PlayButton.IsEnabled = true;
             MarkButton.IsEnabled = true;
@@ -237,6 +284,8 @@ public sealed partial class VoiceClipperView : SettingsPage, IDisposable
         }
         finally
         {
+            _suppressSessionSave = false;
+            SaveSession();
             SetBusy(false, null);
         }
     }
@@ -313,6 +362,7 @@ public sealed partial class VoiceClipperView : SettingsPage, IDisposable
     private void OnClipsChanged()
     {
         Timeline.SetClips(_clips);
+        SaveSession();
 
         var total = _clips.Aggregate(TimeSpan.Zero, (sum, c) => sum + c.Duration);
 

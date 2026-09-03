@@ -18,6 +18,10 @@ namespace CPT.Shell;
 /// </summary>
 public partial class PersonaWindow : Window
 {
+    /// <summary>Virtual host the hologram page is served from. Any name works; it
+    /// just must not resolve on the real network.</summary>
+    private const string HologramHost = "cpt.hologram";
+
     private static readonly SolidColorBrush MicIdleStroke = Frozen(0xB4, 0xB4, 0xB4);
     private static readonly SolidColorBrush MicActiveStroke = Frozen(0xFF, 0x6B, 0x6B);
     private static readonly SolidColorBrush MicSurfaceIdle = Frozen(0x23, 0x23, 0x23);
@@ -52,6 +56,7 @@ public partial class PersonaWindow : Window
             Dispatcher.Invoke(() => PostToWeb(new { type = "transcript_chunk", text = chunk }));
         _services.OnAudioLevel += level => Dispatcher.Invoke(() => PostToWeb(new { type = "level", level }));
         _services.OnTranslationDone += () => Dispatcher.Invoke(BeginDematerialize);
+        _services.OnAgentBusy += busy => Dispatcher.Invoke(() => ShowAgentBusy(busy));
         _services.OnNotification += message => Dispatcher.Invoke(() =>
         {
             Show();
@@ -90,16 +95,20 @@ public partial class PersonaWindow : Window
         Web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
         Web.CoreWebView2.WebMessageReceived += OnWebMessage;
 
-        var html = Path.Combine(AppContext.BaseDirectory, "HologramWeb", "index.html");
-        if (File.Exists(html))
+        // Served over a virtual host, not file://. The page is ES modules and
+        // fetches the head's point cloud; both are blocked on a file: origin.
+        var root = Path.Combine(AppContext.BaseDirectory, "HologramWeb");
+        if (File.Exists(Path.Combine(root, "index.html")))
         {
-            Web.CoreWebView2.Navigate(new Uri(html).AbsoluteUri);
+            Web.CoreWebView2.SetVirtualHostNameToFolderMapping(
+                HologramHost, root, CoreWebView2HostResourceAccessKind.Allow);
+            Web.CoreWebView2.Navigate("https://" + HologramHost + "/index.html");
         }
         else
         {
             Web.CoreWebView2.NavigateToString(
                 "<html><body style='background:#161616;color:#eaeaea;font:13px Consolas;padding:16px'>" +
-                "HologramWeb assets not found at:<br><code>" + html + "</code></body></html>");
+                "HologramWeb assets not found at:<br><code>" + root + "</code></body></html>");
         }
 
         Web.CoreWebView2.DOMContentLoaded += (_, _) =>
@@ -142,6 +151,17 @@ public partial class PersonaWindow : Window
         catch (InvalidOperationException) { /* view torn down mid-post */ }
     }
 
+    /// <summary>
+    /// The wait between sending and hearing back. The spinner turns and the
+    /// panel lights, so a slow model reads as thinking rather than as nothing
+    /// happening. Speaking takes over from here.
+    /// </summary>
+    private void ShowAgentBusy(bool busy)
+    {
+        if (busy) { Show(); PostToWeb(new { type = "thinking" }); }
+        else if (!Pinned) PostToWeb(new { type = "transcript_clear" });
+    }
+
     private void ShowAndAppear()
     {
         Show();
@@ -165,22 +185,13 @@ public partial class PersonaWindow : Window
         var persona = _services.ActivePersona;
         HeaderName.Text = (persona.Name ?? "").ToUpperInvariant();
 
-        // Tint every part of the projector -- cone, halo and lens line -- to the
-        // persona's colour, so the whole stack reads as one cast beam.
-        var colour = ParseColor(persona.Visual.HologramColor, Color.FromRgb(0x6F, 0xC2, 0xD6));
-        ConeStop0.Color = Color.FromArgb(0xCC, colour.R, colour.G, colour.B);
-        ConeStop1.Color = Color.FromArgb(0x66, colour.R, colour.G, colour.B);
-        ConeStop2.Color = Color.FromArgb(0x22, colour.R, colour.G, colour.B);
-        ConeStop3.Color = Color.FromArgb(0x00, colour.R, colour.G, colour.B);
-        HaloStop0.Color = Color.FromArgb(0x00, colour.R, colour.G, colour.B);
-        HaloStop1.Color = Color.FromArgb(0xCC, colour.R, colour.G, colour.B);
-        ProjectorEdge.Fill = new SolidColorBrush(colour);
-
         if (!_webReady) return;
         PostToWeb(new
         {
             type = "persona",
             image = AvatarVisible ? persona.Visual.ImageFile : null,
+            // "prismatic" or a hex colour. The page owns what that means, so a
+            // persona is not limited to one flat brush.
             color = persona.Visual.HologramColor,
             glitch = persona.Visual.GlitchIntensity,
             transcript = persona.ShowTranscriptPanel,
@@ -190,14 +201,6 @@ public partial class PersonaWindow : Window
             hideMicBar = true,
             audioOnly = false,
         });
-    }
-
-    private static Color ParseColor(string? hex, Color fallback)
-    {
-        if (string.IsNullOrEmpty(hex)) return fallback;
-        try { return (Color)ColorConverter.ConvertFromString(hex); }
-        catch (FormatException) { return fallback; }
-        catch (NotSupportedException) { return fallback; }
     }
 
     // --- status strip -----------------------------------------------------

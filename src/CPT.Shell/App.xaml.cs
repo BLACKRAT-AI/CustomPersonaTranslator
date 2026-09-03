@@ -215,9 +215,22 @@ public partial class App : Application, IDisposable
             return;
         }
 
-        _settings = new SettingsWindow(Services, tab);
-        _settings.Closed += (_, _) => _settings = null;
-        _settings.Show();
+        try
+        {
+            _settings = new SettingsWindow(Services, tab);
+            _settings.Closed += (_, _) => _settings = null;
+            _settings.Show();
+        }
+        catch (Exception ex)
+        {
+            // Without this the window simply fails to appear and the app looks
+            // like it ignored the click.
+            _settings = null;
+            CptLog.Write("[app] settings window could not open: " + ex);
+            MessageBox.Show(
+                "Settings could not open:\n\n" + ex.Message + "\n\nDetails were written to:\n" + CptLog.FilePath,
+                "Custom Persona Translator", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     /// <summary>Opens settings on the CLI setup pane.</summary>

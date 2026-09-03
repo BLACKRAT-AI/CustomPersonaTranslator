@@ -12,8 +12,10 @@
         ShowInTaskbar="False"
         WindowStartupLocation="Manual">
 
-    <!-- Top zone:  transparent area for the hologram, with a tinted projector
-                    cone drawn behind the persona canvas.
+    <!-- Top zone:  the hologram panel. Everything visual in it (the glowing
+                    border, the spinner, the projected head) is drawn by
+                    the page, so a persona's colour can be a live spectrum
+                    rather than a single WPF brush.
          Bottom zone: the compact projector bar. Draggable, snaps to edges. -->
     <Grid x:Name="Root">
         <Grid.RowDefinitions>
@@ -23,49 +25,11 @@
 
         <!-- ============== HOLOGRAM ZONE ============== -->
         <Grid Grid.Row="0" x:Name="HoloZone" ClipToBounds="True">
-            <!-- A triangle whose base sits at the bottom of this zone, right
-                 above the bar's lens, and whose apex reaches the persona's
-                 head. The vertical gradient fades from the persona colour at
-                 the base to transparent at the apex, so it reads as a beam. -->
-            <Polygon x:Name="ProjectorCone"
-                     IsHitTestVisible="False"
-                     Stretch="Fill"
-                     Points="0.5,0 0,1 1,1">
-                <Polygon.Fill>
-                    <LinearGradientBrush StartPoint="0.5,1" EndPoint="0.5,0">
-                        <GradientStop x:Name="ConeStop0" Color="#996FC2D6" Offset="0.0"/>
-                        <GradientStop x:Name="ConeStop1" Color="#446FC2D6" Offset="0.35"/>
-                        <GradientStop x:Name="ConeStop2" Color="#1A6FC2D6" Offset="0.7"/>
-                        <GradientStop x:Name="ConeStop3" Color="#006FC2D6" Offset="1.0"/>
-                    </LinearGradientBrush>
-                </Polygon.Fill>
-            </Polygon>
-
             <wv2:WebView2 x:Name="Web"/>
         </Grid>
 
         <!-- ============== PROJECTOR BAR ============== -->
         <Grid Grid.Row="1">
-            <!-- A short halo on the top edge of the bar, so the cone above
-                 visually originates from a thin line of light. -->
-            <Rectangle x:Name="ProjectorHalo"
-                       Height="10"
-                       VerticalAlignment="Top"
-                       IsHitTestVisible="False">
-                <Rectangle.Fill>
-                    <LinearGradientBrush StartPoint="0,1" EndPoint="0,0">
-                        <GradientStop x:Name="HaloStop0" Color="#006FC2D6" Offset="0.0"/>
-                        <GradientStop x:Name="HaloStop1" Color="#996FC2D6" Offset="1.0"/>
-                    </LinearGradientBrush>
-                </Rectangle.Fill>
-            </Rectangle>
-            <Rectangle x:Name="ProjectorEdge"
-                       Height="2"
-                       VerticalAlignment="Top"
-                       Margin="20,0"
-                       Fill="#FF6FC2D6"
-                       Opacity="0.92"
-                       IsHitTestVisible="False"/>
 
             <Border x:Name="Bar"
                     Background="#F2161616"

@@ -1,23 +1,40 @@
 using System;
 using System.Threading;
+using System.Threading.Tasks;
 using NAudio.Wave;
 
 namespace CPT.Core.Tts;
 
-// Buffered streaming player. PCM bytes pushed via Write() play continuously.
-// Exposes a running RMS level for the waveform visualizer.
+/// <summary>
+/// Buffered streaming player. PCM pushed through <see cref="Write"/> plays
+/// continuously, and the level of whatever is <em>currently audible</em> is
+/// reported so the hologram's mouth can move with the voice.
+///
+/// The level deliberately comes from <see cref="PlaybackLevelTap"/> rather than
+/// from the bytes as they arrive: synthesis runs seconds ahead of playback, so
+/// measuring at write time gave the mouth one amplitude per sentence, long
+/// before that sentence could be heard.
+/// </summary>
 public sealed class StreamingAudioPlayer : IDisposable
 {
+    /// <summary>Level updates per second. Matches a display's frame rate.</summary>
+    private const int LevelHz = 60;
+
     private readonly WaveOutEvent _out;
-    private readonly BufferedWaveProvider _buf;
-    private readonly object _lock = new();
+    private readonly BufferedWaveProvider _buffer;
+    private readonly PlaybackLevelTap _tap;
+    private readonly Timer _levelTimer;
+    private readonly object _gate = new();
     private bool _disposed;
 
     public int SampleRate { get; }
     public int Channels { get; }
     public int BitsPerSample { get; }
 
-    public float CurrentLevel { get; private set; } // 0..1 RMS approx
+    /// <summary>Loudness of the audio being heard right now, 0 to 1.</summary>
+    public float CurrentLevel { get; private set; }
+
+    /// <summary>Raised at <see cref="LevelHz"/> while audio is playing.</summary>
     public event Action<float>? LevelChanged;
 
     public StreamingAudioPlayer(int sampleRate, int channels, int bitsPerSample)
@@ -25,72 +42,95 @@ public sealed class StreamingAudioPlayer : IDisposable
         SampleRate = sampleRate;
         Channels = channels;
         BitsPerSample = bitsPerSample;
-        _buf = new BufferedWaveProvider(new WaveFormat(sampleRate, bitsPerSample, channels))
+
+        _buffer = new BufferedWaveProvider(new WaveFormat(sampleRate, bitsPerSample, channels))
         {
             BufferDuration = TimeSpan.FromSeconds(20),
             DiscardOnBufferOverflow = true,
         };
+        _tap = new PlaybackLevelTap(_buffer);
+
         _out = new WaveOutEvent { DesiredLatency = 100 };
-        _out.Init(_buf);
+        _out.Init(_tap);
         _out.Play();
+
+        var period = TimeSpan.FromMilliseconds(1000.0 / LevelHz);
+        _levelTimer = new Timer(_ => PublishLevel(), null, period, period);
     }
 
     public void Write(byte[] pcm)
     {
         if (_disposed) return;
-        lock (_lock) _buf.AddSamples(pcm, 0, pcm.Length);
-        var level = ComputeRms16Bit(pcm);
+        lock (_gate) _buffer.AddSamples(pcm, 0, pcm.Length);
+    }
+
+    /// <summary>
+    /// Reports the level of the audio the sound card has actually reached.
+    /// </summary>
+    private void PublishLevel()
+    {
+        if (_disposed) return;
+
+        float level;
+        try
+        {
+            level = _tap.LevelAt(_out.GetPosition());
+        }
+        catch (Exception ex) when (ex is NAudio.MmException or ObjectDisposedException)
+        {
+            return;   // the device went away mid-utterance
+        }
+
+        // Silence needs no event: the hologram's own release handles the tail,
+        // and this runs sixty times a second for the life of the app.
+        if (level <= 0.0005f && CurrentLevel <= 0.0005f) return;
+
         CurrentLevel = level;
         LevelChanged?.Invoke(level);
     }
 
     public void StopAndFlush()
     {
-        lock (_lock) _buf.ClearBuffer();
+        lock (_gate) _buffer.ClearBuffer();
         _out.Stop();
+        _tap.Reset();
         _out.Play();
     }
 
-    // Block until the buffered samples have actually been played. Without
-    // this, the pipeline's OnDone fires the instant the last sentence is
-    // queued — but with a 100 ms WaveOut latency + tail pad still in the
-    // buffer, the listener heard the final word get clipped because the
-    // hologram's "sending" animation started before audio finished.
-    public async System.Threading.Tasks.Task WaitForDrainAsync(System.Threading.CancellationToken ct = default)
+    /// <summary>
+    /// Waits until the buffered samples have actually been played.
+    ///
+    /// Without this the pipeline reports "done" the moment the last sentence is
+    /// queued, and with a 100 ms device latency plus the tail still buffered the
+    /// listener hears the final word clipped as the hologram starts folding away.
+    /// </summary>
+    public async Task WaitForDrainAsync(CancellationToken cancellationToken = default)
     {
         if (_disposed) return;
-        // Drain check: BufferedWaveProvider exposes BufferedBytes.
+
         while (!_disposed)
         {
             int buffered;
-            lock (_lock) buffered = _buf.BufferedBytes;
+            lock (_gate) buffered = _buffer.BufferedBytes;
             if (buffered <= 0) break;
-            try { await System.Threading.Tasks.Task.Delay(60, ct); }
-            catch { break; }
+
+            try { await Task.Delay(60, cancellationToken).ConfigureAwait(false); }
+            catch (OperationCanceledException) { break; }
         }
-        // One more latency-sized wait so the WaveOut's own queue empties.
-        try { await System.Threading.Tasks.Task.Delay(140, ct); } catch { }
+
+        // One more latency-sized wait so the device's own queue empties.
+        try { await Task.Delay(140, cancellationToken).ConfigureAwait(false); }
+        catch (OperationCanceledException) { }
     }
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        try { _out.Stop(); } catch { }
-        _out.Dispose();
-    }
 
-    private static float ComputeRms16Bit(byte[] pcm)
-    {
-        if (pcm.Length < 2) return 0;
-        double sumSq = 0;
-        int samples = pcm.Length / 2;
-        for (int i = 0; i + 1 < pcm.Length; i += 2)
-        {
-            short s = (short)(pcm[i] | (pcm[i + 1] << 8));
-            double v = s / 32768.0;
-            sumSq += v * v;
-        }
-        return (float)Math.Min(1.0, Math.Sqrt(sumSq / samples) * 2.0);
+        _levelTimer.Dispose();
+        try { _out.Stop(); }
+        catch (NAudio.MmException) { /* already gone */ }
+        _out.Dispose();
     }
 }

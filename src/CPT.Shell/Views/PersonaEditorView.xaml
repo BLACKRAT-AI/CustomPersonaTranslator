@@ -141,7 +141,10 @@
                         </DockPanel>
 
                         <TextBlock Text="HOLOGRAM COLOR" Style="{StaticResource Caption}"/>
-                        <TextBox x:Name="ColorBox" Text="#6FC2D6"/>
+                        <TextBox x:Name="ColorBox" Text="prismatic"/>
+                        <TextBlock Style="{StaticResource Hint}" Margin="2,4,0,0">
+                            "prismatic" for the full spectrum, or a hex colour such as #6FC2D6.
+                        </TextBlock>
 
                         <TextBlock Text="IO PROVIDERS" Style="{StaticResource Caption}"/>
                         <StackPanel Orientation="Horizontal">

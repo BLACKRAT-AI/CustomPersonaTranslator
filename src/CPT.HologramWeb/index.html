@@ -1,64 +1,122 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><title>CPT Hologram</title>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CPT Hologram</title>
 <style>
-  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden;
-               font-family: 'Segoe UI', sans-serif; color: #eaeaea; height: 100%; }
-  /* Projector-bar layout: the only thing this page renders is the hologram
-     canvas — the WPF window owns the bar, mic and toolbar. */
-  #stage { display: flex; flex-direction: column; height: 100vh; padding: 0; box-sizing: border-box; gap: 0; }
-  #holo { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden;
-          background: transparent; border: none; }
-  #holo.hidden { display: none; }
-  #personaCanvas { width: 100%; height: 100%; display: block; }
-  /* Audio mic / transcript / toggle live in the WPF bar now. */
-  #controls, #toggleVisual, #transcript { display: none !important; }
-  #status { position: absolute; top: 6px; right: 10px; font-size: 10px; opacity: 0.55; letter-spacing: 1px;
-            color: #8c8c8c; text-transform: uppercase; }
-  /* Legacy in-page toggle hidden; the WPF header bar now owns the show/hide affordance. */
-  #toggleVisual { display: none; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: transparent; overflow: hidden;
+    font-family: 'Segoe UI', system-ui, sans-serif; color: #eaeaea;
+  }
+  /* Two stacked canvases: the border and spinner underneath, the projected head
+     on top. Separating them lets the border run at a capped frame rate while the
+     head stays at full rate for the lip-sync. */
+  #stage { position: relative; height: 100vh; }
+  #stage > canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #glow { z-index: 0; }
+  #holo { z-index: 1; }
 
-  #transcript { display: none; flex: 0 0 auto; max-height: 30vh; overflow-y: auto;
-                background: rgba(255,255,255,0.04); border: 1px solid #2b2b2b;
-                border-radius: 4px; padding: 6px 10px; font-size: 12px; line-height: 1.45; color: #cfcfcf; }
-  #transcript.shown { display: block; }
-
-  /* Hologram-hidden mode: a compact docked bar with the audio-graph button only. */
-  body.audioOnly { background: transparent; }
-  body.audioOnly #stage { padding: 6px; gap: 0; }
-
-  /* The single push-to-talk control. The waveform is rendered inside via canvas. */
-  #controls { flex: 0 0 auto; }
-  #mic { position: relative; width: 100%; height: 52px; padding: 0; margin: 0;
-         background: #2b2b2b; border: 1px solid #333333;
-         border-radius: 6px; cursor: pointer; user-select: none; overflow: hidden;
-         display: block; }
-  #mic:hover { background: #3a3a3a; }
-  #mic.active { background: #4a3030; border-color: #6a4040; }
-  #wave { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-  #micIcon { position: absolute; top: 50%; right: 12px; transform: translateY(-50%);
-             pointer-events: none; opacity: 0.9; }
-  body.audioOnly #mic { height: 44px; }
+  #toast {
+    position: absolute; left: 10px; right: 10px; bottom: 8px; z-index: 2;
+    padding: 7px 10px; border-radius: 7px;
+    background: rgba(20,20,20,0.88); border: 1px solid #3a3a3a;
+    font-size: 11px; line-height: 1.35; color: #cfcfcf;
+    opacity: 0; transition: opacity 200ms ease;
+    pointer-events: none;
+  }
+  #toast.shown { opacity: 1; }
 </style>
 </head>
 <body>
   <div id="stage">
-    <div id="holo">
-      <canvas id="personaCanvas"></canvas>
-      <button id="toggleVisual" title="Hide / show persona visual">hide visual</button>
-      <div id="status">idle</div>
-    </div>
-    <div id="transcript"></div>
-    <div id="controls">
-      <button id="mic" aria-label="Push to talk">
-        <canvas id="wave"></canvas>
-        <svg id="micIcon" width="20" height="20" viewBox="0 0 24 24" fill="none"
-             stroke="#eaeaea" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="9" y="3" width="6" height="11" rx="3"/>
-          <path d="M5 11a7 7 0 0 0 14 0"/>
-          <line x1="12" y1="19" x2="12" y2="22"/>
-        </svg>
-      </button>
-    </div>
+    <canvas id="glow"></canvas>
+    <canvas id="holo"></canvas>
+    <div id="toast"></div>
   </div>
-  <script src="hologram.js"></script>
-</body></html>
+
+<script type="module">
+import { Hologram } from './hologram.js';
+import { Prismatic } from './prismatic.js';
+
+const hologram = new Hologram(document.getElementById('holo'));
+const glow = new Prismatic(document.getElementById('glow'));
+const toast = document.getElementById('toast');
+
+// The border owns the phase and the spinner's geometry; the hologram reads both
+// so the projection leaves the ring in step with the colours running round it.
+hologram.ring = glow;
+glow.start();
+hologram.start();
+
+let toastTimer = 0;
+function showToast(text) {
+  toast.textContent = text;
+  toast.classList.add('shown');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove('shown'), 4200);
+}
+
+function setState(state) {
+  hologram.setState(state);
+  glow.setState(state === 'speaking' ? 'speaking' : state === 'thinking' ? 'busy' : 'idle');
+}
+
+function apply(message) {
+  switch (message.type) {
+    case 'persona':
+      // "prismatic" (or nothing) gives the full spectrum; a persona's own colour
+      // is tinted around itself so the spinner and border still read as moving.
+      hologram.setPalette(message.color);
+      glow.setPalette(message.color);
+      break;
+
+    case 'appear':
+      hologram.talking = true;
+      setState('speaking');
+      break;
+
+    // The amplitude of the audio being heard right now, sixty times a second.
+    // This is the lip-sync: it drives the jaw directly.
+    case 'level':
+      hologram.setMouth(Number(message.level) || 0);
+      break;
+
+    // A chunk of the reply arriving is a word boundary — pulse the mouth so it
+    // still moves if the audio level is unavailable.
+    case 'transcript_chunk':
+      hologram.mouthHit(0.5);
+      break;
+
+    case 'sending':
+    case 'transcript_clear':
+      hologram.talking = false;
+      setState('idle');
+      break;
+
+    case 'thinking':
+      setState('thinking');
+      break;
+
+    case 'toast':
+      showToast(String(message.text || ''));
+      break;
+  }
+}
+
+window.chrome.webview.addEventListener('message', (event) => {
+  // PostWebMessageAsJson delivers an already-parsed object; accept a string too
+  // so a command is never silently dropped over how the host sent it.
+  let message = event.data;
+  if (typeof message === 'string') {
+    try { message = JSON.parse(message); } catch { return; }
+  }
+  if (message && message.type) apply(message);
+});
+
+window.addEventListener('resize', () => { hologram.relayout(); glow.start(); });
+
+window.chrome.webview.postMessage(JSON.stringify({ type: 'ready' }));
+</script>
+</body>
+</html>
