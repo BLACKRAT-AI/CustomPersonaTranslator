@@ -480,6 +480,7 @@ public sealed class AppServices : IDisposable
         {
             if (!Stt.IsAvailable)
             {
+                CptLog.Write("[standby] refused to start: speech recognition is unavailable");
                 OnNotification?.Invoke(
                     "Standby needs speech recognition. Set the whisper binary and model in Settings.");
                 OnStandbyStateChanged?.Invoke(StandbyUiState.Off);

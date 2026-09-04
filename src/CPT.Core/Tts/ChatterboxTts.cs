@@ -26,6 +26,17 @@ public sealed class ChatterboxTts : ITtsEngine, IDisposable
     private int _sampleRate = 24000;
     private bool _disposed;
 
+
+    /// <summary>
+    /// How much intonation the clone adds, 0 to 1.
+    ///
+    /// Chatterbox's own default of 0.5 performs rather than reads, which is why
+    /// a deliberately monotone reference came back with intonation it never had.
+    /// Lower keeps the delivery of the reference clip, which is the point of
+    /// cloning a voice at all. Set per persona before each reply.
+    /// </summary>
+    public double Expressiveness { get; set; } = 0.3;
+
     // Set by the host so warmup / first synthesis can stream model-load
     // progress to the UI. Optional.
     public IProgress<string>? Progress { get; set; }

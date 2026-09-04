@@ -77,6 +77,18 @@
                                   IsChecked="True"
                                   Content="Also learn how they talk from this clip"
                                   ToolTip="Transcribes the clip and uses the speaker's own phrasing as writing samples"/>
+                        <DockPanel LastChildFill="True" Margin="0,12,0,0">
+                            <TextBlock Text="Delivery" Width="90" VerticalAlignment="Center"
+                                       Foreground="{StaticResource Muted}" FontSize="12"/>
+                            <TextBlock x:Name="ExpressionValue" DockPanel.Dock="Right" Width="64"
+                                       TextAlignment="Right" VerticalAlignment="Center"
+                                       Foreground="{StaticResource Text}" FontSize="11"/>
+                            <Slider x:Name="ExpressionSlider"
+                                    Minimum="0" Maximum="1" Value="0.3"
+                                    TickFrequency="0.05" IsSnapToTickEnabled="True"
+                                    ValueChanged="OnExpressionChanged"
+                                    ToolTip="How much intonation the cloned voice adds. Low copies the reference clip's delivery, so a monotone reference stays monotone."/>
+                        </DockPanel>
 
                         <!-- The path itself, for pasting or checking. -->
                         <TextBox x:Name="VoiceFileBox"

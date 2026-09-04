@@ -12,6 +12,95 @@ using CPT.Core.Tts;
 
 var settings = AppSettings.Load();
 
+if (args.Length >= 1 && args[0] == "standby")
+{
+    // Runs the real standby listener and prints everything it does, so "it does
+    // not work" becomes a specific step that did not happen.
+    //   dotnet run -- standby [seconds]
+    var listenFor = args.Length >= 2 ? int.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture) : 25;
+    var whisper = new CPT.Core.Stt.WhisperCpp(settings.WhisperPath, settings.WhisperModelPath);
+
+    Console.WriteLine($"[standby] recognition available = {whisper.IsAvailable}");
+    if (!whisper.IsAvailable)
+    {
+        Console.WriteLine("[standby] whisper is missing, so standby would refuse to start. Set its paths in Settings.");
+        return;
+    }
+
+    Console.WriteLine($"[standby] wake   = \"{settings.Standby.WakePhrase}\"");
+    Console.WriteLine($"[standby] send   = \"{settings.Standby.SendPhrase}\"");
+
+    await using var listener = new CPT.Core.Voice.StandbyListener(whisper, settings.Standby);
+    listener.Woke += () => Console.WriteLine("[standby] WOKE");
+    listener.Captured += captured => Console.WriteLine("[standby] captured: " + captured);
+    listener.Cancelled += () => Console.WriteLine("[standby] cancelled");
+    listener.Failed += message => Console.WriteLine("[standby] FAILED: " + message);
+    listener.RequestReady += request => Console.WriteLine("[standby] REQUEST: " + request);
+
+    listener.Start();
+    if (!listener.IsRunning) { Console.WriteLine("[standby] the microphone did not open"); return; }
+
+    Console.WriteLine($"[standby] listening for {listenFor}s — say the wake phrase, then a question, then the send phrase.");
+    await Task.Delay(TimeSpan.FromSeconds(listenFor));
+    listener.Stop();
+    Console.WriteLine("[standby] done. Every line above also goes to the app's log.");
+    return;
+}
+
+if (args.Length >= 1 && args[0] == "levels")
+{
+    // Pushes a known tone through the real player and reports the level events
+    // the hologram's mouth is driven by. "The lips do not move" is otherwise
+    // three different bugs wearing the same coat.
+    //   dotnet run -- levels
+    const int rate = 22050;
+    var player = new StreamingAudioPlayer(rate, 1, 16);
+
+    var events = 0;
+    var peak = 0f;
+    var first = TimeSpan.Zero;
+    var clock = System.Diagnostics.Stopwatch.StartNew();
+    player.LevelChanged += level =>
+    {
+        if (events == 0) first = clock.Elapsed;
+        events++;
+        if (level > peak) peak = level;
+    };
+
+    // Half a second of silence, then a second of tone, then silence: the level
+    // must be near zero, then high, then fall again.
+    static byte[] Tone(int rate, double seconds, double amplitude)
+    {
+        var samples = (int)(rate * seconds);
+        var pcm = new byte[samples * 2];
+        for (var i = 0; i < samples; i++)
+        {
+            var value = (short)(Math.Sin(i * 2 * Math.PI * 220 / rate) * amplitude * short.MaxValue);
+            pcm[i * 2] = (byte)(value & 0xFF);
+            pcm[i * 2 + 1] = (byte)((value >> 8) & 0xFF);
+        }
+        return pcm;
+    }
+
+    player.Write(Tone(rate, 0.5, 0));
+    player.Write(Tone(rate, 1.0, 0.6));
+    player.Write(Tone(rate, 0.5, 0));
+
+    await player.WaitForDrainAsync(CancellationToken.None);
+    await Task.Delay(200);
+    player.Dispose();
+
+    Console.WriteLine($"[levels] events = {events}");
+    Console.WriteLine($"[levels] first  = {first.TotalMilliseconds:0} ms after the first write");
+    Console.WriteLine($"[levels] peak   = {peak:0.###}");
+    Console.WriteLine(events == 0
+        ? "[levels] NO level events — the mouth has nothing to move with"
+        : peak < 0.05f
+            ? "[levels] events fire but the level never rises — the tap is not seeing the audio"
+            : "[levels] levels track the audio; the mouth has what it needs");
+    return;
+}
+
 if (args.Length >= 1 && args[0] == "mic")
 {
     // Reports what the microphone is actually delivering, against the standby
@@ -138,7 +227,9 @@ if (args.Length >= 1 && args[0] == "agent")
 
 if (args.Length >= 1 && args[0] == "pipedrive")
 {
-    await CPT.Smoke.PipelineDrive.RunAsync(args.Length >= 2 ? args[1] : "ytclone");
+    await CPT.Smoke.PipelineDrive.RunAsync(
+        args.Length >= 2 ? args[1] : "startrek_computer",
+        args.Length >= 3 ? args[2] : "Systems nominal. All decks report ready.");
     return;
 }
 

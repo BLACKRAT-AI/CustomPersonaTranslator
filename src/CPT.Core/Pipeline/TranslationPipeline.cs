@@ -69,6 +69,10 @@ public sealed class TranslationPipeline : IDisposable
         SelectEngineForPersona(persona);
         _speakingAs = persona.Name;
 
+        // The persona decides how much the clone performs, not the engine.
+        if (_cloneTts is ChatterboxTts chatterbox)
+            chatterbox.Expressiveness = Math.Clamp(persona.Voice.Expressiveness, 0, 1);
+
         // NOT here. Appearing at the start of a turn put a head on screen for the
         // several seconds a rewrite and a synthesis take, and for turns that
         // produced nothing at all. It appears when audio does -- see

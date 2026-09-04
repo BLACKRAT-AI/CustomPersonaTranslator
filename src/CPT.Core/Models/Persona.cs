@@ -37,6 +37,12 @@ public sealed class VoiceConfig
     // Piper: model file name (e.g., "en_US-amy-medium.onnx"); Chatterbox: cloned-voice id
     public string VoiceRef { get; set; } = "en_US-amy-medium";
     public float Speed { get; set; } = 1.0f;
+
+    /// <summary>
+    /// How much intonation a cloned voice adds, 0 to 1. Low follows the
+    /// reference clip's own delivery; a monotone reference stays monotone.
+    /// </summary>
+    public double Expressiveness { get; set; } = 0.3;
     public float Pitch { get; set; } = 1.0f;
     public string? VoiceSampleFile { get; set; }
 }

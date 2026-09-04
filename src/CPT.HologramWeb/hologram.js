@@ -20,6 +20,15 @@ const HEAD_WIDTH = 0.576;
 /** The head size the particle count is calibrated against. */
 const BASE_SCALE = 200;
 
+/** How fast the loudness reference falls, per level update at 60Hz (about 2s). */
+const LEVEL_PEAK_DECAY = 0.994;
+
+/** The quietest reference ever used, so silence is not amplified into speech. */
+const LEVEL_MIN_PEAK = 0.02;
+
+/** Below this the audio is silence between words, not quiet speech. */
+const LEVEL_SILENCE = 0.004;
+
 /** A dot is always this big. Crispness is not a function of panel size. */
 const DOT_RADIUS = 1.3;
 
@@ -85,6 +94,7 @@ export class Hologram {
     this.mouthOpen = 0;         // lip-open amount, pulsed per spoken word
     this.vWide = 0; this._vWideT = 0; this._vi = 0; this._prevLvl = 0; this._lastViseme = -9;
     this._lipEnv = 0;           // slow-attack lip-open envelope — culls quick/jitter words
+    this._levelPeak = 0;        // loudest audio heard lately; the mouth is measured against it
     this._gzY = 0; this._gzP = 0; this._gzTY = 0; this._gzTP = 0; this._nextGaze = 0;
     this._gzVY = 0; this._gzVP = 0;   // gaze velocities (a damped spring → smooth ease-in/out, no lurch)
     this.ring = null;           // the Prismatic clock — shared phase and energy
@@ -140,14 +150,33 @@ export class Hologram {
 
   /**
    * The amplitude of the audio coming out of the speaker right now, 0..1. This
-   * is the lip-sync, and the only thing that should be driving the jaw while
-   * the voice is audible.
+   * is the lip-sync, and the only thing that should drive the jaw while the
+   * voice is audible.
+   *
+   * The value is NORMALISED against the loudest audio heard recently, because
+   * an absolute amplitude is not a mouth position. A cloned voice measured 0.051
+   * peak where a preset measured 0.857: the jaw was opening about half a pixel
+   * and the head looked completely still. Measuring each engine against its own
+   * loudness makes a quiet voice open the mouth as wide as a loud one, which is
+   * what a person does.
    */
   setMouth(v) {
-    this.mouthTarget = Math.max(0, Math.min(1, v));
+    const level = Math.max(0, Math.min(1, Number(v) || 0));
     this._lastMouthAt = this.t;
     this.mouthOpen = 0;                 // a real level supersedes any fallback pulse
-    if (v > 0.05) this.level = Math.min(1.5, this.level + 0.12);
+
+    // A slowly decaying peak: it rises instantly with the voice and falls back
+    // over a couple of seconds, so one loud syllable cannot deafen the rest of
+    // the sentence and a quiet passage is not amplified into a flapping jaw.
+    this._levelPeak = Math.max(level, this._levelPeak * LEVEL_PEAK_DECAY);
+
+    // Below the noise floor is silence, not quiet speech. Without this the
+    // normalisation would stretch the gap between words into a wide-open mouth.
+    this.mouthTarget = level < LEVEL_SILENCE
+      ? 0
+      : Math.min(1, level / Math.max(this._levelPeak, LEVEL_MIN_PEAK));
+
+    if (this.mouthTarget > 0.05) this.level = Math.min(1.5, this.level + 0.12);
     this._kick();
   }
 

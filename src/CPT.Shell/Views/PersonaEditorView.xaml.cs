@@ -44,6 +44,7 @@ public sealed partial class PersonaEditorView : SettingsPage
 
         RefreshCloneAvailabilityUi();
         LoadHologramLook(existing);
+        OnExpressionChanged(this, new RoutedPropertyChangedEventArgs<double>(0, ExpressionSlider.Value));
         if (existing != null) LoadExisting(existing);
         else if (_services.CloningAvailable)
         {
@@ -65,6 +66,7 @@ public sealed partial class PersonaEditorView : SettingsPage
         DescriptionBox.Text = p.Description;
         TextSamplesBox.Text = string.Join("\n\n", p.FewShotQuotes);
         VoiceFileBox.Text = p.Voice.VoiceSampleFile ?? "";
+        ExpressionSlider.Value = Math.Clamp(p.Voice.Expressiveness, 0, 1);
         ImageFileBox.Text = p.Visual.ImageFile ?? "";
 
         IoLocal.IsChecked         = p.IoProviders.Contains("local");
@@ -81,6 +83,24 @@ public sealed partial class PersonaEditorView : SettingsPage
 
         // Editing an existing persona: expand advanced so the user sees what's there.
         AdvancedExpander.IsExpanded = true;
+    }
+
+
+    /// <summary>
+    /// Shows the delivery setting in words, because a number from nought to one
+    /// says nothing about what it will sound like.
+    /// </summary>
+    private void OnExpressionChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (ExpressionValue is null) return;
+
+        ExpressionValue.Text = e.NewValue switch
+        {
+            <= 0.15 => "flat",
+            <= 0.35 => "faithful",
+            <= 0.6 => "lively",
+            _ => "theatrical",
+        };
     }
 
     private void OnModeChanged(object sender, RoutedEventArgs e) => ApplyModeUi();
@@ -549,6 +569,9 @@ public sealed partial class PersonaEditorView : SettingsPage
                     Step($"WARN: could not persist sample ({ex.Message}); keeping original path.");
                 }
             }
+
+            // Delivery is the user's choice, not the builder's.
+            persona.Voice.Expressiveness = ExpressionSlider.Value;
 
             _services.Personas.Save(persona);
             CPT.Core.Diagnostics.CptLog.Write(
