@@ -608,10 +608,19 @@ public sealed class AppServices : IDisposable
             }
 
             _standby ??= CreateStandbyListener();
+
+            // Before Start, every time. Without this the listener knows only the
+            // general phrase from settings, so an agent's own name is heard
+            // perfectly and ignored -- which is exactly what the log showed:
+            //     heard (Sleeping): Hey computer.
+            PublishWakePhrases();
+
             _standby.Start();
+            CptLog.Write($"[standby] running={_standby.IsRunning}");
         }
         else
         {
+            CptLog.Write("[standby] switched off");
             _standby?.Stop();
         }
 

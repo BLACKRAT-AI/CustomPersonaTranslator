@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.IO;
 using System.Threading;
 using System.Threading.Channels;
@@ -127,7 +128,16 @@ public sealed class StandbyListener : IAsyncDisposable
 
         _microphone.Start();
         IsRunning = _microphone.IsCapturing;
-        if (IsRunning) CptLog.Write("[standby] listening for wake phrase: " + _settings.WakePhrase);
+        // Every phrase it will actually answer to, not just the general one. A
+        // listener that had never been told the agents' names logged a
+        // confident "listening for hey agent" and ignored "Hey computer".
+        if (IsRunning)
+        {
+            var known = _settings.WakePhrases
+                .Concat(_machine.ExtraWakePhrases.Select(p => p.Phrase))
+                .Select(p => """ + p + """);
+            CptLog.Write("[standby] listening for: " + string.Join(", ", known));
+        }
     }
 
 
