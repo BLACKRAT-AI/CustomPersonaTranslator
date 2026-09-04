@@ -246,6 +246,40 @@ public sealed class TranslationPipeline : IDisposable
         }
     }
 
+
+    /// <summary>
+    /// Speaks a line with the PRESET voice, whatever the persona normally uses.
+    ///
+    /// For the one case where speed beats fidelity: an acknowledgement with no
+    /// cached line behind it yet. Piper answers in about half a second where a
+    /// cold clone takes nearly forty, and a stand-in voice saying "working on
+    /// it" is a better answer than silence.
+    /// </summary>
+    public async Task SpeakWithPresetAsync(Persona persona, string text, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return;
+
+        _speakingAs = persona.Name;
+        _announced = false;
+        _player?.Dispose();
+        _player = null;
+
+        try
+        {
+            await StreamAsync(_piperTts, persona.Voice.VoiceRef, text, ct).ConfigureAwait(false);
+
+            if (_player is not null)
+            {
+                try { await _player.WaitForDrainAsync(ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
+            }
+        }
+        finally
+        {
+            OnDone?.Invoke();
+        }
+    }
+
     /// <summary>Pushes the current volume to whatever is speaking right now.</summary>
     public void ApplyVolume() => _player?.ApplyVolume();
 

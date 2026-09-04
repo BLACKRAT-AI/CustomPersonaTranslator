@@ -316,22 +316,32 @@ public sealed class AppServices : IDisposable
     private async Task AcknowledgeAsync(CancellationToken cancellationToken)
     {
         var line = Acknowledgements.Ready(ActivePersona);
-        if (line is null)
+        if (line is not null)
         {
-            // Not built yet. Start it, and say nothing this time rather than
-            // making the user wait to be told they will be kept waiting.
-            WarmAcknowledgements();
-            return;
+            try
+            {
+                await Pipeline.SpeakCachedAsync(line, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { CptLog.Write("[ack] " + ex.Message); }
         }
+
+        // Nothing cached yet: the first session with a persona, or just after
+        // its voice changed. Start building, and meanwhile say it in the preset
+        // voice, which is measured at about half a second. A different voice is
+        // a poor answer; no answer at all is a worse one.
+        WarmAcknowledgements();
 
         try
         {
-            await Pipeline.SpeakCachedAsync(line, cancellationToken).ConfigureAwait(false);
+            await Pipeline.SpeakWithPresetAsync(
+                ActivePersona, AcknowledgementCache.Lines[0], cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            CptLog.Write("[ack] " + ex.Message);
+            CptLog.Write("[ack] fallback failed: " + ex.Message);
         }
     }
 
