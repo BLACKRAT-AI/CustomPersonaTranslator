@@ -31,6 +31,10 @@
     <!-- Waveform, for standby / always-listening. -->
     <Geometry x:Key="IconWaveform">M3,12 H5.5 L8,6.5 L11,17.5 L14,9.5 L16,14 L18.5,12 H21</Geometry>
 
+    <!-- Speaker cone with two arcs. The arcs are what makes it read as volume
+         rather than as a generic block at 15px. -->
+    <Geometry x:Key="IconVolume">M4,9.5 H7.5 L12,5.5 V18.5 L7.5,14.5 H4 Z M15,9 A4.5,4.5 0 0,1 15,15 M17.5,6.5 A8,8 0 0,1 17.5,17.5</Geometry>
+
     <!-- Sliders, for settings. -->
     <Geometry x:Key="IconSettings">M3,7.5 H8.2 M11.8,7.5 H21 M8.2,7.5 A1.8,1.8 0 1,0 11.8,7.5 A1.8,1.8 0 1,0 8.2,7.5 Z M3,16.5 H12.2 M15.8,16.5 H21 M12.2,16.5 A1.8,1.8 0 1,0 15.8,16.5 A1.8,1.8 0 1,0 12.2,16.5 Z</Geometry>
 

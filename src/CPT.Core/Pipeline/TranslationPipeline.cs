@@ -67,8 +67,13 @@ public sealed class TranslationPipeline : IDisposable
         if (string.IsNullOrWhiteSpace(spoken)) return;
 
         SelectEngineForPersona(persona);
+        _speakingAs = persona.Name;
 
-        OnAppear?.Invoke(persona.Name);
+        // NOT here. Appearing at the start of a turn put a head on screen for the
+        // several seconds a rewrite and a synthesis take, and for turns that
+        // produced nothing at all. It appears when audio does -- see
+        // EnsurePlayerAsync, which runs on the first PCM that actually arrives.
+        _announced = false;
 
         // The player is built from the first audio that actually arrives, not
         // from what the engine predicts it will produce.
@@ -147,6 +152,10 @@ public sealed class TranslationPipeline : IDisposable
     /// plainly-spoken answer rather than to silence, which is what "I asked a
     /// question and nothing happened" actually was.
     /// </summary>
+
+    /// <summary>Pushes the current volume to whatever is speaking right now.</summary>
+    public void ApplyVolume() => _player?.ApplyVolume();
+
     private async Task<string> RewriteAsync(Persona persona, string spoken, CancellationToken ct)
     {
         var rewrite = new StringBuilder();
@@ -252,6 +261,13 @@ public sealed class TranslationPipeline : IDisposable
 
         _player = new StreamingAudioPlayer(engine.SampleRate, engine.Channels, engine.BitsPerSample);
         _player.LevelChanged += level => OnAudioLevel?.Invoke(level);
+
+        // The first audio of the reply is the moment to show a face.
+        if (!_announced)
+        {
+            _announced = true;
+            OnAppear?.Invoke(_speakingAs);
+        }
     }
     /// <summary>
     /// How long an answer can be and still be rewritten in full before any of
@@ -295,6 +311,8 @@ public sealed class TranslationPipeline : IDisposable
     private const int CloneFailuresBeforeGivingUp = 3;
 
     private int _cloneFailures;
+    private bool _announced;
+    private string _speakingAs = "";
 
     private static bool HasSentenceEnd(string s)
     {

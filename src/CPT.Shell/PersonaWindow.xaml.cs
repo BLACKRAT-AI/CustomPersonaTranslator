@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Globalization;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
@@ -81,6 +82,7 @@ public partial class PersonaWindow : Window
 
         StandbyToggle.IsChecked = _services.IsStandbyRunning;
         ShowCliStatus(_services.Cli.Status);
+        ShowVolume(_services.SpeakingVolume);
     }
 
     /// <summary>When pinned, the hologram stays visible after a reply finishes.</summary>
@@ -262,6 +264,34 @@ public partial class PersonaWindow : Window
         Width = width;
         Height = height;
         PositionBottomRight();
+    }
+
+
+    // --- volume -----------------------------------------------------------
+
+    private bool _suppressVolume;
+
+    /// <summary>
+    /// Shows the stored volume without writing it straight back.
+    ///
+    /// A Slider raises ValueChanged when its value is set in code as well as by
+    /// hand, so loading the stored value would save it again and, on the way,
+    /// tell every other control it had changed.
+    /// </summary>
+    private void ShowVolume(double volume)
+    {
+        _suppressVolume = true;
+        VolumeSlider.Value = Math.Clamp(volume, 0, 1);
+        _suppressVolume = false;
+        VolumeReadout.Text = (VolumeSlider.Value * 100).ToString("0", CultureInfo.InvariantCulture) + "%";
+    }
+
+    private void OnVolumeChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        VolumeReadout.Text = (e.NewValue * 100).ToString("0", CultureInfo.InvariantCulture) + "%";
+        if (_suppressVolume || _services is null) return;
+
+        _services.SpeakingVolume = e.NewValue;
     }
 
     // --- CLI trouble ------------------------------------------------------

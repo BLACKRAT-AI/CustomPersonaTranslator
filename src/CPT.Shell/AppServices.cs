@@ -88,6 +88,7 @@ public sealed class AppServices : IDisposable
     public AppServices()
     {
         Settings = AppSettings.Load();
+        StreamingAudioPlayer.Volume = (float)Math.Clamp(Settings.SpeakingVolume, 0, 1);
         Gpu = HardwareProbe.DetectGpu();
 
         Personas = new PersonaStore();
@@ -534,6 +535,29 @@ public sealed class AppServices : IDisposable
         }
         if (wasRunning) SetStandbyEnabled(true);
     }
+
+
+    // --- speaking volume --------------------------------------------------
+
+    /// <summary>How loud replies are spoken, 0 to 1.</summary>
+    public double SpeakingVolume
+    {
+        get => Settings.SpeakingVolume;
+        set
+        {
+            var clamped = Math.Clamp(value, 0, 1);
+            if (Math.Abs(clamped - Settings.SpeakingVolume) < 0.001) return;
+
+            Settings.SpeakingVolume = clamped;
+            StreamingAudioPlayer.Volume = (float)clamped;
+            Pipeline.ApplyVolume();
+            Settings.Save();
+            OnVolumeChanged?.Invoke(clamped);
+        }
+    }
+
+    /// <summary>Raised when the volume changes, so every control showing it agrees.</summary>
+    public event Action<double>? OnVolumeChanged;
 
     // --- personas ---------------------------------------------------------
 

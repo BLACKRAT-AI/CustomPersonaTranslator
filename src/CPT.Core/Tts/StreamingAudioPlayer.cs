@@ -21,6 +21,25 @@ public sealed class StreamingAudioPlayer : IDisposable
     private const int LevelHz = 60;
 
     private readonly WaveOutEvent _out;
+
+    /// <summary>
+    /// Output volume for every player, 0 to 1.
+    ///
+    /// Static because a reply is spoken through a player built for that reply:
+    /// a per-instance setting would be forgotten between sentences. Full by
+    /// default -- a cloned voice is often quieter than a Piper preset, and a
+    /// reply nobody can hear is the same as no reply.
+    /// </summary>
+    public static float Volume { get; set; } = 1.0f;
+
+    /// <summary>Applies a new volume to the player that is speaking right now.</summary>
+    public void ApplyVolume()
+    {
+        try { _out.Volume = Math.Clamp(Volume, 0f, 1f); }
+        catch (ArgumentOutOfRangeException) { }
+        catch (NAudio.MmException) { }
+    }
+
     private readonly BufferedWaveProvider _buffer;
     private readonly PlaybackLevelTap _tap;
     private readonly Timer _levelTimer;
@@ -50,7 +69,7 @@ public sealed class StreamingAudioPlayer : IDisposable
         };
         _tap = new PlaybackLevelTap(_buffer);
 
-        _out = new WaveOutEvent { DesiredLatency = 100 };
+        _out = new WaveOutEvent { DesiredLatency = 100, Volume = Math.Clamp(Volume, 0f, 1f) };
         _out.Init(_tap);
         _out.Play();
 

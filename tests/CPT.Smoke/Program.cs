@@ -12,6 +12,51 @@ using CPT.Core.Tts;
 
 var settings = AppSettings.Load();
 
+if (args.Length >= 1 && args[0] == "mic")
+{
+    // Reports what the microphone is actually delivering, against the standby
+    // threshold. "Standby does not work" is otherwise unanswerable: it can mean
+    // no audio, audio too quiet to pass the gate, or recognition failing.
+    //   dotnet run -- mic [seconds]
+    var seconds = args.Length >= 2 ? int.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture) : 5;
+
+    using var capture = new CPT.Core.Stt.ContinuousMicCapture();
+    var detector = new CPT.Core.Voice.VoiceActivityDetector(settings.Standby.SilenceThreshold);
+    var frames = 0;
+    var speechFrames = 0;
+    var peak = 0f;
+    double sum = 0;
+
+    capture.FrameCaptured += frame =>
+    {
+        frames++;
+        sum += frame.Level;
+        if (frame.Level > peak) peak = frame.Level;
+        if (detector.Process(frame.Level) != CPT.Core.Voice.VoiceActivity.Silence) speechFrames++;
+    };
+    capture.CaptureFailed += message => Console.WriteLine("[mic] FAILED: " + message);
+
+    Console.WriteLine($"[mic] listening for {seconds}s — say something…");
+    capture.Start();
+    if (!capture.IsCapturing) { Console.WriteLine("[mic] the microphone did not open"); return; }
+
+    await Task.Delay(TimeSpan.FromSeconds(seconds));
+    capture.Stop();
+
+    Console.WriteLine($"[mic] frames  = {frames}");
+    Console.WriteLine($"[mic] mean    = {(frames == 0 ? 0 : sum / frames):0.#####}");
+    Console.WriteLine($"[mic] peak    = {peak:0.#####}");
+    Console.WriteLine($"[mic] room    = {detector.NoiseFloor:0.#####}   (learned)");
+    Console.WriteLine($"[mic] gate    = {detector.Gate:0.#####}   (adapts to the room)");
+    Console.WriteLine($"[mic] speech  = {speechFrames} of {frames} frames");
+    Console.WriteLine(frames == 0
+        ? "[mic] no audio at all — the device is not delivering frames"
+        : speechFrames == 0
+            ? "[mic] nothing above the gate. If you were speaking, the microphone is too quiet."
+            : "[mic] speech detected; standby can hear a wake phrase");
+    return;
+}
+
 if (args.Length >= 1 && args[0] == "stt")
 {
     // Transcribes a WAV through the same code path push-to-talk and standby use.

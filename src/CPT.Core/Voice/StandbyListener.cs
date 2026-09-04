@@ -42,6 +42,12 @@ public sealed class StandbyListener : IAsyncDisposable
     private readonly object _audioGate = new();
     private Task? _worker;
     private DateTime _lastSpeechAt = DateTime.UtcNow;
+
+    /// <summary>One diagnostic line roughly every ten seconds of 50 ms frames.</summary>
+    private const int FramesPerReport = 200;
+
+    private int _framesSinceReport;
+    private float _peakSinceReport;
     private DateTime _wokeAt = DateTime.MinValue;
     private Timer? _idleTimer;
     private bool _disposed;
@@ -122,6 +128,7 @@ public sealed class StandbyListener : IAsyncDisposable
     private void OnFrame(AudioFrame frame)
     {
         LevelChanged?.Invoke(frame.Level);
+        ReportListening(frame.Level);
 
         var activity = _detector.Process(frame.Level);
         string? completedUtterance = null;
@@ -213,6 +220,28 @@ public sealed class StandbyListener : IAsyncDisposable
         {
             // Shutting down.
         }
+    }
+
+
+    /// <summary>
+    /// Says what standby is hearing, once every few seconds, while nothing has
+    /// triggered.
+    ///
+    /// "Standby does not work" is otherwise unanswerable from a log: it can mean
+    /// no audio, audio below the gate, or recognition returning nothing. One
+    /// line with the level and the gate in it distinguishes all three.
+    /// </summary>
+    private void ReportListening(float level)
+    {
+        _framesSinceReport++;
+        if (level > _peakSinceReport) _peakSinceReport = level;
+        if (_framesSinceReport < FramesPerReport) return;
+
+        CptLog.Write($"[standby] listening — peak {_peakSinceReport:0.####}, "
+            + $"gate {_detector.Gate:0.####}, room {_detector.NoiseFloor:0.####}");
+
+        _framesSinceReport = 0;
+        _peakSinceReport = 0;
     }
 
     private void Apply(string transcript)

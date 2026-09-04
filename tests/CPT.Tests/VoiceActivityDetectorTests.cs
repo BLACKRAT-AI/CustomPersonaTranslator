@@ -8,13 +8,23 @@ public class VoiceActivityDetectorTests
     private const float Loud = 0.2f;
     private const float Quiet = 0.001f;
 
-    /// <summary>50 ms frames: two to start, fourteen to end, six for a real utterance.</summary>
-    private static VoiceActivityDetector Create() => new(
-        threshold: 0.02f,
-        frameMilliseconds: 50,
-        startMilliseconds: 100,
-        endMilliseconds: 700,
-        minimumSpeechMilliseconds: 300);
+    /// <summary>
+    /// The detector learns the room before it will report anything, so every
+    /// test starts the way a real session does: a moment of quiet.
+    /// </summary>
+    private static VoiceActivityDetector Create()
+    {
+        var detector = new VoiceActivityDetector(
+            threshold: 0.02f,
+            frameMilliseconds: 50,
+            startMilliseconds: 100,
+            endMilliseconds: 700,
+            minimumSpeechMilliseconds: 300);
+
+        Feed(detector, Quiet, 20);
+        return detector;
+    }
+
 
     private static VoiceActivity Feed(VoiceActivityDetector detector, float level, int frames)
     {
@@ -99,5 +109,54 @@ public class VoiceActivityDetectorTests
         var detector = new VoiceActivityDetector(threshold: 0.5f, frameMilliseconds: 50);
 
         Assert.Equal(VoiceActivity.Silence, Feed(detector, 0.3f, 20));
+    }
+
+    /// <summary>
+    /// The failure this adaptation exists for. A microphone whose room noise
+    /// peaks at 0.0013 and whose speech reaches 0.01 is far below the old fixed
+    /// gate of 0.02, so standby listened forever and never heard a word.
+    /// </summary>
+    [Fact]
+    public void A_quiet_microphone_is_still_heard()
+    {
+        var detector = new VoiceActivityDetector(threshold: 0.02f, frameMilliseconds: 50);
+
+        Feed(detector, 0.0013f, 40);                       // the room, as measured
+        Assert.False(detector.IsInSpeech);
+
+        Assert.Equal(VoiceActivity.Speech, Feed(detector, 0.01f, 4));
+        Assert.True(detector.IsInSpeech);
+    }
+
+    /// <summary>
+    /// And the opposite: a noisy room must not transcribe itself. The gate
+    /// rises with the floor, so ambient noise never counts as speech however
+    /// loud the room is.
+    /// </summary>
+    [Fact]
+    public void A_noisy_room_does_not_trigger_on_itself()
+    {
+        var detector = new VoiceActivityDetector(threshold: 0.02f, frameMilliseconds: 50);
+
+        Assert.Equal(VoiceActivity.Silence, Feed(detector, 0.03f, 200));
+        Assert.False(detector.IsInSpeech);
+
+        // Speech still has to be clearly above that room to register.
+        Assert.Equal(VoiceActivity.Speech, Feed(detector, 0.3f, 4));
+    }
+
+    /// <summary>
+    /// Opening the microphone mid-sentence must not take that sentence for the
+    /// room, which is what learning the floor from the first frame would do.
+    /// </summary>
+    [Fact]
+    public void Speech_during_calibration_does_not_become_the_noise_floor()
+    {
+        var detector = new VoiceActivityDetector(threshold: 0.02f, frameMilliseconds: 50);
+
+        Feed(detector, 0.25f, 12);                         // calibration, all speech
+        Feed(detector, 0.001f, 30);                        // the speaker stops
+
+        Assert.Equal(VoiceActivity.Speech, Feed(detector, 0.05f, 4));
     }
 }

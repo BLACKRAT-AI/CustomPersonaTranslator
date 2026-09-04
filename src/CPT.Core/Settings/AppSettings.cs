@@ -140,6 +140,12 @@ public sealed class AppSettings
     public string WhisperModelPath { get; set; } = "";
     public string TtsEngine { get; set; } = "piper";   // piper | chatterbox
     public bool AutoDowngradeOnNoGpu { get; set; } = true;
+
+    /// <summary>
+    /// Speaking volume, 0 to 1. Full by default: a cloned voice is often much
+    /// quieter than a Piper preset, and a reply nobody can hear is no reply.
+    /// </summary>
+    public double SpeakingVolume { get; set; } = 1.0;
     public string ChatterboxPython { get; set; } = "";
     public string ChatterboxScript { get; set; } = "";
 

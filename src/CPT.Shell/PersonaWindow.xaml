@@ -57,6 +57,43 @@
                                         ToolTip="Settings"/>
         
                                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <!-- Volume, with the slider in a popup the way the Windows
+                                         tray control used to work. A slider in the bar itself
+                                         would take room this bar does not have. -->
+                                    <ToggleButton x:Name="VolumeToggle"
+                                                  Style="{StaticResource ToolbarIconToggle}"
+                                                  Tag="{StaticResource IconVolume}"
+                                                  AutomationProperties.Name="Volume"
+                                                  ToolTip="How loud replies are spoken"/>
+                                    <Popup PlacementTarget="{Binding ElementName=VolumeToggle}"
+                                           Placement="Top"
+                                           VerticalOffset="-6"
+                                           StaysOpen="False"
+                                           AllowsTransparency="True"
+                                           IsOpen="{Binding IsChecked, ElementName=VolumeToggle, Mode=TwoWay}">
+                                        <Border Background="#F2141619"
+                                                BorderBrush="#FF33363D"
+                                                BorderThickness="1"
+                                                CornerRadius="10"
+                                                Padding="8,10">
+                                            <StackPanel Width="48">
+                                                <TextBlock x:Name="VolumeReadout"
+                                                           Text="100%"
+                                                           HorizontalAlignment="Center"
+                                                           FontSize="10"
+                                                           Foreground="{StaticResource Muted}"
+                                                           Margin="0,0,0,6"/>
+                                                <Slider x:Name="VolumeSlider"
+                                                        Orientation="Vertical"
+                                                        Height="120"
+                                                        HorizontalAlignment="Center"
+                                                        Minimum="0" Maximum="1" Value="1"
+                                                        SmallChange="0.05" LargeChange="0.1"
+                                                        ValueChanged="OnVolumeChanged"
+                                                        AutomationProperties.Name="Speaking volume"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </Popup>
                                     <ToggleButton x:Name="StandbyToggle"
                                                   Style="{StaticResource ToolbarIconToggle}"
                                                   Tag="{StaticResource IconWaveform}"

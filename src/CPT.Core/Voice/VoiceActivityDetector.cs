@@ -23,19 +23,55 @@ public enum VoiceActivity
 /// before it counts as started, and stay quiet noticeably longer before it counts
 /// as finished. The asymmetry is deliberate -- a false start costs one wasted
 /// transcription, a false end truncates what the user was saying.
+///
+/// The gate ADAPTS to the microphone. A fixed threshold is a guess about
+/// hardware, and on this machine it was wrong by fifteen times: the default of
+/// 0.02 against a microphone whose ambient level peaks at 0.0013, so standby
+/// listened forever and never once heard anything. The detector now learns the
+/// room's noise floor while it is quiet and triggers on speech RELATIVE to it,
+/// with a small absolute floor so a silent room cannot make it hair-trigger.
 /// </summary>
 public sealed class VoiceActivityDetector
 {
-    private readonly float _threshold;
+    /// <summary>How much louder than the noise floor a frame must be to count as speech.</summary>
+    private const float SpeechOverNoise = 3.5f;
+
+    /// <summary>
+    /// The quietest gate ever used, whatever the room. Below this, a fan or a
+    /// hard drive would start transcribing.
+    /// </summary>
+    private const float AbsoluteFloor = 0.0012f;
+
+    /// <summary>How fast the noise floor follows the room, per quiet frame.</summary>
+    private const float FloorRise = 0.02f;
+    private const float FloorFall = 0.25f;
+
+    /// <summary>
+    /// Frames spent learning the room before the gate can fire.
+    ///
+    /// Without this the very first frame sets the noise floor, so a detector
+    /// that opens mid-sentence would take that speech for the room and deafen
+    /// itself for as long as the sentence lasted.
+    /// </summary>
+    private const int CalibrationFrames = 12;
+
+    private readonly float _sensitivity;
     private readonly int _framesToStart;
     private readonly int _framesToEnd;
     private readonly int _minimumSpeechFrames;
 
+    private float _noiseFloor = -1;
+    private int _calibrating = CalibrationFrames;
     private int _consecutiveLoud;
     private int _consecutiveQuiet;
     private int _speechFrames;
 
-    /// <param name="threshold">RMS level above which a frame counts as loud, 0 to 1.</param>
+
+    /// <param name="threshold">
+    /// Sensitivity, kept for the settings slider. It scales the gate rather than
+    /// setting it outright, so a stored value tuned for one microphone cannot
+    /// silence another.
+    /// </param>
     /// <param name="frameMilliseconds">Duration of one frame, used to convert the settings below.</param>
     /// <param name="startMilliseconds">How long it must stay loud before speech starts.</param>
     /// <param name="endMilliseconds">How long it must stay quiet before speech ends.</param>
@@ -49,7 +85,9 @@ public sealed class VoiceActivityDetector
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(frameMilliseconds);
 
-        _threshold = Math.Clamp(threshold, 0.0005f, 1f);
+        // 0.02 was the old default and means "normal": higher demands more, lower
+        // demands less, and neither can push the gate somewhere unusable.
+        _sensitivity = Math.Clamp(threshold / 0.02f, 0.25f, 4f);
         _framesToStart = Math.Max(1, startMilliseconds / frameMilliseconds);
         _framesToEnd = Math.Max(1, endMilliseconds / frameMilliseconds);
         _minimumSpeechFrames = Math.Max(1, minimumSpeechMilliseconds / frameMilliseconds);
@@ -58,10 +96,35 @@ public sealed class VoiceActivityDetector
     /// <summary>True while an utterance is being spoken.</summary>
     public bool IsInSpeech { get; private set; }
 
+    /// <summary>The level a frame must currently exceed to count as speech.</summary>
+    public float Gate => Math.Max(AbsoluteFloor, Math.Max(0, _noiseFloor) * SpeechOverNoise) * _sensitivity;
+
+    /// <summary>What the detector believes the room's quiet level to be.</summary>
+    public float NoiseFloor => Math.Max(0, _noiseFloor);
+
     /// <summary>Feeds one frame's loudness in and returns what it means.</summary>
     public VoiceActivity Process(float level)
     {
-        var loud = level >= _threshold;
+        if (_noiseFloor < 0) _noiseFloor = level;
+
+        // Learn the room first, and report nothing while doing it.
+        if (_calibrating > 0)
+        {
+            _calibrating--;
+            _noiseFloor += (level - _noiseFloor) * 0.5f;
+            return VoiceActivity.Silence;
+        }
+
+        var loud = level >= Gate;
+
+        // The floor is learned from quiet frames only: adapting during speech
+        // would let a long sentence raise the gate above its own voice.
+        if (!IsInSpeech && !loud)
+        {
+            var rate = level > _noiseFloor ? FloorRise : FloorFall;
+            _noiseFloor += (level - _noiseFloor) * rate;
+        }
+
 
         if (!IsInSpeech)
         {
@@ -88,12 +151,19 @@ public sealed class VoiceActivityDetector
         // The trailing silence is part of the frame count but not of the speech,
         // so measure the utterance without it before deciding it was real.
         var wasLongEnough = _speechFrames - _consecutiveQuiet >= _minimumSpeechFrames;
-        Reset();
+        EndUtterance();
         return wasLongEnough ? VoiceActivity.UtteranceEnded : VoiceActivity.Silence;
     }
 
     /// <summary>Forgets the current utterance, as after a manual stop.</summary>
     public void Reset()
+    {
+        EndUtterance();
+        _noiseFloor = -1;                 // re-learn the room from scratch
+        _calibrating = CalibrationFrames;
+    }
+
+    private void EndUtterance()
     {
         IsInSpeech = false;
         _consecutiveLoud = 0;
