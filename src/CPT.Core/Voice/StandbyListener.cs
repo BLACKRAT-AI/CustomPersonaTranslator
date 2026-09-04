@@ -25,7 +25,17 @@ namespace CPT.Core.Voice;
 public sealed class StandbyListener : IAsyncDisposable
 {
     private const int FrameMilliseconds = 50;
-    private const int PreRollFrames = 6;   // 300 ms kept before speech is detected
+    /// <summary>
+    /// Audio kept from BEFORE speech is detected, in frames of 50 ms.
+    ///
+    /// A wake phrase sits at the very start of an utterance, which is the part
+    /// most easily lost: the gate needs a moment to open and the detector
+    /// spends its first frames learning the room. At 300 ms the recogniser was
+    /// hearing "agent, why did the build fail" -- the "hey" clipped off, so no
+    /// configured phrase could ever match. A second of history costs 32 KB and
+    /// keeps the whole phrase.
+    /// </summary>
+    private const int PreRollFrames = 20;
 
     private readonly ContinuousMicCapture _microphone = new();
     private readonly ITranscriber _transcriber;
@@ -114,6 +124,29 @@ public sealed class StandbyListener : IAsyncDisposable
         _microphone.Start();
         IsRunning = _microphone.IsCapturing;
         if (IsRunning) CptLog.Write("[standby] listening for wake phrase: " + _settings.WakePhrase);
+    }
+
+
+    /// <summary>
+    /// Pushes one frame of audio through exactly the path the microphone uses:
+    /// the same gate, the same segmentation, the same temporary WAV and the same
+    /// recognition.
+    ///
+    /// It exists because "standby does not work" was diagnosed twice from the
+    /// parts and fixed twice without the whole ever being run. The microphone
+    /// itself is the only thing this cannot prove, and it is the one part that
+    /// can be measured directly.
+    /// </summary>
+    internal void InjectFrameForTest(byte[] pcm, float level) => OnFrame(new AudioFrame(pcm, level));
+
+    /// <summary>Starts everything except the microphone, for an injected run.</summary>
+    internal void StartWithoutMicrophoneForTest()
+    {
+        _machine.Reset();
+        _detector.Reset();
+        _lastSpeechAt = DateTime.UtcNow;
+        _worker ??= Task.Run(() => ProcessTranscriptionsAsync(_stop.Token));
+        IsRunning = true;
     }
 
     /// <summary>Stops listening and forgets any part-dictated request.</summary>

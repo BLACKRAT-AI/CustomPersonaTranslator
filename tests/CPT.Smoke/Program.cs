@@ -13,6 +13,96 @@ using CPT.Core.Tts;
 
 var settings = AppSettings.Load();
 
+if (args.Length >= 1 && args[0] == "wakelive")
+{
+    // The whole live path except the microphone itself: synthesised speech is
+    // pushed through the listener frame by frame, so the gate, the utterance
+    // segmentation, the temporary WAV, recognition and the wake rules all run
+    // exactly as they do when someone speaks.
+    //   dotnet run -- wakelive ["hey computer why did the build fail"]
+    var line = args.Length >= 2 ? args[1] : settings.Standby.WakePhrase + " why did the build fail";
+    var piperVoice = new PiperTts(settings.PiperPath, settings.PiperModelsDir);
+    var recogniser = new CPT.Core.Stt.WhisperCpp(settings.WhisperPath, settings.WhisperModelPath);
+
+    Console.WriteLine($"[live] saying \"{line}\"");
+
+    var audio = new System.IO.MemoryStream();
+    await foreach (var chunk in piperVoice.SynthesizeStreamAsync(line, "en_US-amy-medium"))
+        audio.Write(chunk, 0, chunk.Length);
+
+    // Piper runs at its own rate; the microphone path is 16 kHz mono, so the
+    // audio is resampled before injection rather than after, exactly as a real
+    // microphone would deliver it.
+    var rawAudio = new NAudio.Wave.RawSourceWaveStream(
+        new System.IO.MemoryStream(audio.ToArray()),
+        new NAudio.Wave.WaveFormat(piperVoice.SampleRate, piperVoice.BitsPerSample, piperVoice.Channels));
+    using var resampled = new NAudio.Wave.MediaFoundationResampler(
+        rawAudio, CPT.Core.Stt.ContinuousMicCapture.Format) { ResamplerQuality = 60 };
+
+    await using var live = new CPT.Core.Voice.StandbyListener(recogniser, settings.Standby);
+    live.ExtraWakePhrases = settings.Agents.Agents
+        .Where(a => !string.IsNullOrWhiteSpace(a.TriggerPhrase))
+        .Select(a => (a.TriggerPhrase, a.Id))
+        .ToList();
+
+    var woke = false;
+    string? request = null;
+    string? addressed = null;
+    live.Woke += () => woke = true;
+    live.Captured += text => Console.WriteLine("[live] captured: " + text);
+    live.Failed += message => Console.WriteLine("[live] FAILED: " + message);
+    live.LevelChanged += _ => { };
+    live.RequestReady += (r, agent) => { request = r; addressed = agent; };
+
+    live.StartWithoutMicrophoneForTest();
+
+    // 50 ms frames, then a second of silence so the utterance closes.
+    var probe = new CPT.Core.Voice.VoiceActivityDetector(settings.Standby.SilenceThreshold);
+    var speechFrames = 0;
+    var ended = 0;
+
+    var frameBytes = CPT.Core.Stt.ContinuousMicCapture.Format.AverageBytesPerSecond / 20;
+    var buffer = new byte[frameBytes];
+    var injected = 0;
+    int read;
+    while ((read = resampled.Read(buffer, 0, frameBytes)) > 0)
+    {
+        var frame = new byte[read];
+        Buffer.BlockCopy(buffer, 0, frame, 0, read);
+        var lvl = CPT.Core.Stt.PcmLevel.RootMeanSquare(frame);
+        if (injected % 10 == 0) Console.WriteLine("[live]   frame " + injected + "  level " + lvl.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture));
+        var verdict = probe.Process(lvl);
+        if (verdict == CPT.Core.Voice.VoiceActivity.Speech) speechFrames++;
+        if (verdict == CPT.Core.Voice.VoiceActivity.UtteranceEnded) ended++;
+        live.InjectFrameForTest(frame, lvl);
+        injected++;
+    }
+
+    var silence = new byte[frameBytes];
+    for (var i = 0; i < 40; i++)
+    {
+        var verdict = probe.Process(0.0002f);
+        if (verdict == CPT.Core.Voice.VoiceActivity.UtteranceEnded) ended++;
+        live.InjectFrameForTest(silence, 0.0002f);
+    }
+
+    Console.WriteLine("[live] gate now " + probe.Gate.ToString("0.#####", System.Globalization.CultureInfo.InvariantCulture)
+        + ", speech frames " + speechFrames + ", utterances " + ended);
+
+    Console.WriteLine($"[live] injected {injected} frames of speech");
+    await Task.Delay(6000);          // let recognition finish
+
+    Console.WriteLine($"[live] woke      = {woke}");
+    Console.WriteLine($"[live] request   = {request ?? "(none)"}");
+    Console.WriteLine($"[live] addressed = {addressed ?? "(the general phrase)"}");
+    // A phrase and a question in one breath go straight to Send, so a request
+    // is success even though the Woke event never fired on its own.
+    Console.WriteLine(woke || request is not null
+        ? "[live] the live path works: audio -> gate -> utterance -> recognition -> wake."
+        : "[live] NOT woken. The audio never became a recognised utterance.");
+    return;
+}
+
 if (args.Length >= 1 && args[0] == "wake")
 {
     // Proves the whole wake chain with real audio and real recognition, and

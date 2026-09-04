@@ -103,12 +103,23 @@ public class VoiceActivityDetectorTests
         Assert.False(detector.IsInSpeech);
     }
 
+    /// <summary>
+    /// Sensitivity scales the gate rather than setting it, so what it must
+    /// guarantee is the RELATIONSHIP: demanding more really does demand more.
+    /// Pinning an exact level here would only pin the arithmetic.
+    /// </summary>
     [Fact]
-    public void A_higher_threshold_ignores_quieter_sound()
+    public void A_higher_threshold_demands_a_louder_sound()
     {
-        var detector = new VoiceActivityDetector(threshold: 0.5f, frameMilliseconds: 50);
+        var normal = new VoiceActivityDetector(threshold: 0.02f, frameMilliseconds: 50);
+        var strict = new VoiceActivityDetector(threshold: 0.08f, frameMilliseconds: 50);
 
-        Assert.Equal(VoiceActivity.Silence, Feed(detector, 0.3f, 20));
+        Feed(normal, Quiet, 20);
+        Feed(strict, Quiet, 20);
+
+        Assert.True(strict.Gate > normal.Gate);
+        Assert.Equal(VoiceActivity.Silence, Feed(strict, normal.Gate * 1.5f, 6));
+        Assert.Equal(VoiceActivity.Speech, Feed(normal, normal.Gate * 1.5f, 6));
     }
 
     /// <summary>

@@ -96,11 +96,19 @@ public sealed class VoiceActivityDetector
     /// <summary>True while an utterance is being spoken.</summary>
     public bool IsInSpeech { get; private set; }
 
+    /// <summary>
+    /// The loudest a "room" is allowed to be. Anything above this is somebody
+    /// talking, not background, and letting the floor climb there would raise
+    /// the gate above the very voice it is meant to hear.
+    /// </summary>
+    private const float MaxNoiseFloor = 0.02f;
+
     /// <summary>The level a frame must currently exceed to count as speech.</summary>
-    public float Gate => Math.Max(AbsoluteFloor, Math.Max(0, _noiseFloor) * SpeechOverNoise) * _sensitivity;
+    public float Gate =>
+        Math.Max(AbsoluteFloor, Math.Clamp(_noiseFloor, 0, MaxNoiseFloor) * SpeechOverNoise) * _sensitivity;
 
     /// <summary>What the detector believes the room's quiet level to be.</summary>
-    public float NoiseFloor => Math.Max(0, _noiseFloor);
+    public float NoiseFloor => Math.Clamp(_noiseFloor, 0, MaxNoiseFloor);
 
     /// <summary>Feeds one frame's loudness in and returns what it means.</summary>
     public VoiceActivity Process(float level)
@@ -108,10 +116,16 @@ public sealed class VoiceActivityDetector
         if (_noiseFloor < 0) _noiseFloor = level;
 
         // Learn the room first, and report nothing while doing it.
+        //
+        // The MINIMUM, not an average: if someone is already speaking when this
+        // opens, an average is dragged up by their voice and the gate ends up
+        // above it -- measured at 0.52 against speech of 0.2, which is deaf.
+        // The quietest moment in the window is the room whatever else is
+        // happening.
         if (_calibrating > 0)
         {
             _calibrating--;
-            _noiseFloor += (level - _noiseFloor) * 0.5f;
+            _noiseFloor = Math.Min(_noiseFloor, level);
             return VoiceActivity.Silence;
         }
 

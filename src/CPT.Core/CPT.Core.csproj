@@ -14,6 +14,7 @@
          building, command-line quoting and transcript clean-up. Making them
          public purely to test them would widen the API for no caller. -->
     <InternalsVisibleTo Include="CPT.Tests" />
+    <InternalsVisibleTo Include="CPT.Smoke" />
   </ItemGroup>
 
 </Project>
