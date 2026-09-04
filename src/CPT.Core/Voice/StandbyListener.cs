@@ -38,6 +38,15 @@ public sealed class StandbyListener : IAsyncDisposable
     /// </summary>
     private const int PreRollFrames = 20;
 
+    /// <summary>
+    /// How long the user has to start speaking after being woken.
+    ///
+    /// Longer than the pause that ENDS a request: waking is a moment to draw
+    /// breath, and recognition itself takes a couple of seconds, so the clock
+    /// has already been running before the wake is even known about.
+    /// </summary>
+    private const int StartSpeakingSeconds = 8;
+
     private readonly ContinuousMicCapture _microphone = new();
     private readonly ITranscriber _transcriber;
     private readonly StandbySettings _settings;
@@ -58,7 +67,6 @@ public sealed class StandbyListener : IAsyncDisposable
     private const int FramesPerReport = 200;
 
     private int _framesSinceReport;
-    private int _idleTraces;
     private float _peakSinceReport;
     private DateTime _wokeAt = DateTime.MinValue;
     private Timer? _idleTimer;
@@ -135,7 +143,7 @@ public sealed class StandbyListener : IAsyncDisposable
         {
             var known = _settings.WakePhrases
                 .Concat(_machine.ExtraWakePhrases.Select(p => p.Phrase))
-                .Select(p => """ + p + """);
+                .Select(p => "\"" + p + "\"");
             CptLog.Write("[standby] listening for: " + string.Join(", ", known));
         }
     }
@@ -309,6 +317,12 @@ public sealed class StandbyListener : IAsyncDisposable
 
     private void Apply(string transcript)
     {
+        // The silence clock measures time since something was HEARD, not since the
+        // audio arrived: recognition lags by a couple of seconds, and using the
+        // audio's timestamp meant a wake phrase spoken alone was already
+        // "silent for 2.4s" the instant it woke, and gave up immediately.
+        _lastSpeechAt = DateTime.UtcNow;
+
         CptLog.Write($"[standby] heard ({_machine.State}): {transcript}");
         Publish(_machine.Consume(transcript));
     }
@@ -349,15 +363,6 @@ public sealed class StandbyListener : IAsyncDisposable
         if (!IsRunning) return;
         if (_machine.State != StandbyState.Listening) return;
 
-        if (_idleTraces++ % 20 == 0)
-        {
-            var quiet = (DateTime.UtcNow - _lastSpeechAt).TotalSeconds;
-            CptLog.Write("[standby] awaiting the end of the request: "
-                + quiet.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)
-                + "s of " + _settings.SilenceTimeoutSeconds + "s silence, captured \""
-                + _machine.Captured + "\"");
-        }
-
         var now = DateTime.UtcNow;
 
         if (_settings.MaxRequestSeconds > 0
@@ -369,12 +374,20 @@ public sealed class StandbyListener : IAsyncDisposable
             return;
         }
 
-        if (_settings.SilenceTimeoutSeconds > 0
-            && (now - _lastSpeechAt).TotalSeconds >= _settings.SilenceTimeoutSeconds)
-        {
-            CptLog.Write("[standby] silence timeout; sending what was captured");
-            Publish(_machine.OnSilenceTimeout());
-        }
+        // Nothing dictated yet means the user has been woken and has not
+        // started speaking. That deserves time to draw breath, not the pause
+        // that ends a finished sentence -- with one timeout for both, waking on
+        // a phrase spoken alone gave up before the question arrived.
+        var allowed = _machine.Captured.Length == 0
+            ? StartSpeakingSeconds
+            : _settings.SilenceTimeoutSeconds;
+
+        if (allowed <= 0 || (now - _lastSpeechAt).TotalSeconds < allowed) return;
+
+        CptLog.Write(_machine.Captured.Length == 0
+            ? "[standby] nothing was said after waking; going back to sleep"
+            : "[standby] silence timeout; sending what was captured");
+        Publish(_machine.OnSilenceTimeout());
     }
 
     private static void TryDelete(string? path)

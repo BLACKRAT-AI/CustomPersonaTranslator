@@ -141,6 +141,7 @@
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto"/>
                                             <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
         
                                         <Viewbox Grid.Column="0" Width="15" Height="15" Margin="0,0,8,0">
@@ -168,6 +169,34 @@
                                                        FontSize="10"
                                                        TextTrimming="CharacterEllipsis"/>
                                         </StackPanel>
+                                        <!-- Ready to listen. A pulsing green dot inside the talk
+                                             button, because standby's state is otherwise invisible:
+                                             the tone says it woke, this says it still is. -->
+                                        <Ellipse x:Name="ListeningDot"
+                                                 Grid.Column="2"
+                                                 Width="9" Height="9"
+                                                 Margin="8,0,2,0"
+                                                 VerticalAlignment="Center"
+                                                 Fill="#FF4ADE80"
+                                                 Visibility="Collapsed">
+                                            <Ellipse.Effect>
+                                                <DropShadowEffect ShadowDepth="0"
+                                                                  BlurRadius="9"
+                                                                  Opacity="0.9"
+                                                                  Color="#FF4ADE80"/>
+                                            </Ellipse.Effect>
+                                            <Ellipse.Triggers>
+                                                <EventTrigger RoutedEvent="Ellipse.Loaded">
+                                                    <BeginStoryboard>
+                                                        <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                                            <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                                             From="1.0" To="0.25"
+                                                                             Duration="0:0:0.9"/>
+                                                        </Storyboard>
+                                                    </BeginStoryboard>
+                                                </EventTrigger>
+                                            </Ellipse.Triggers>
+                                        </Ellipse>
                                     </Grid>
                                 </Border>
                             </DockPanel>

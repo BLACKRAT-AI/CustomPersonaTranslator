@@ -327,6 +327,13 @@ public partial class PersonaWindow : Window
     {
         StandbyToggle.IsChecked = state != StandbyUiState.Off;
 
+        // The dot pulses only while it is actually taking dictation. Showing it
+        // whenever standby is on would make "ready" and "listening to you now"
+        // look identical, which is the thing it exists to distinguish.
+        ListeningDot.Visibility = state == StandbyUiState.Listening
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
         switch (state)
         {
             case StandbyUiState.Off:

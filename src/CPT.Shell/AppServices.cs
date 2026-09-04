@@ -635,7 +635,9 @@ public sealed class AppServices : IDisposable
 
         listener.Woke += () =>
         {
-            OnPersonaAppear?.Invoke(ActivePersona.Name);
+            // A tone, so waking is something you hear rather than something you
+            // have to test for by speaking.
+            ReadyChime.PlayReady();
             OnStandbyStateChanged?.Invoke(StandbyUiState.Listening);
         };
         listener.Captured += text => OnTranscriptChunk?.Invoke(text);
@@ -645,6 +647,7 @@ public sealed class AppServices : IDisposable
         listener.RequestReady += (request, addressed) =>
         {
             OnStandbyStateChanged?.Invoke(StandbyUiState.Sleeping);
+            ReadyChime.PlayTaken();
 
             // Whoever was named is who answers. Without this, saying an agent's
             // own phrase woke the app and then handed the question to whichever

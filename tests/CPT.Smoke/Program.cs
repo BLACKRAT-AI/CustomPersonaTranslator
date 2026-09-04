@@ -269,6 +269,72 @@ if (args.Length >= 1 && args[0] == "quiet")
     return;
 }
 
+if (args.Length >= 1 && args[0] == "wakethenask")
+{
+    // The way people actually talk: the name, a pause, then the question. This
+    // is what failed -- the wake phrase alone left nothing captured, and the
+    // silence clock had already expired by the time recognition caught up.
+    //   dotnet run -- wakethenask ["hey computer"] ["why did the build fail"]
+    var name = args.Length >= 2 ? args[1] : "hey computer";
+    var question = args.Length >= 3 ? args[2] : "why did the build fail";
+
+    var voice = new PiperTts(settings.PiperPath, settings.PiperModelsDir);
+    var ear = new CPT.Core.Stt.WhisperCpp(settings.WhisperPath, settings.WhisperModelPath);
+
+    await using var session = new CPT.Core.Voice.StandbyListener(ear, settings.Standby);
+    session.ExtraWakePhrases = settings.Agents.Agents
+        .SelectMany(a => a.TriggerPhrases.Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => (p, a.Id)))
+        .ToList();
+
+    string? got = null;
+    string? forAgent = null;
+    session.Woke += () => Console.WriteLine("[two] woke");
+    session.Captured += text => Console.WriteLine("[two] captured: " + text);
+    session.RequestReady += (r, agent) => { got = r; forAgent = agent; };
+    session.StartWithoutMicrophoneForTest();
+
+    var frameBytes = CPT.Core.Stt.ContinuousMicCapture.Format.AverageBytesPerSecond / 20;
+
+    async Task Speak(string what)
+    {
+        var pcm = new System.IO.MemoryStream();
+        await foreach (var chunk in voice.SynthesizeStreamAsync(what, "en_US-amy-medium"))
+            pcm.Write(chunk, 0, chunk.Length);
+
+        var raw = new NAudio.Wave.RawSourceWaveStream(
+            new System.IO.MemoryStream(pcm.ToArray()),
+            new NAudio.Wave.WaveFormat(voice.SampleRate, voice.BitsPerSample, voice.Channels));
+        using var resampled = new NAudio.Wave.MediaFoundationResampler(
+            raw, CPT.Core.Stt.ContinuousMicCapture.Format) { ResamplerQuality = 60 };
+
+        var buffer = new byte[frameBytes];
+        int read;
+        while ((read = resampled.Read(buffer, 0, frameBytes)) > 0)
+        {
+            var frame = new byte[read];
+            Buffer.BlockCopy(buffer, 0, frame, 0, read);
+            session.InjectFrameForTest(frame, CPT.Core.Stt.PcmLevel.RootMeanSquare(frame));
+        }
+
+        var quiet = new byte[frameBytes];
+        for (var i = 0; i < 20; i++) session.InjectFrameForTest(quiet, 0.0002f);
+    }
+
+    Console.WriteLine($"[two] saying \"{name}\", pausing, then \"{question}\"");
+    await Speak(name);
+    await Task.Delay(4000);          // the pause a person leaves after the name
+    await Speak(question);
+    await Task.Delay(8000);
+
+    session.Stop();
+    Console.WriteLine($"[two] request   = {got ?? "(none)"}");
+    Console.WriteLine($"[two] addressed = {forAgent ?? "(the general phrase)"}");
+    Console.WriteLine(got is not null
+        ? "[two] the name, a pause, then the question: the whole thing works."
+        : "[two] the question never arrived. It gave up between the two.");
+    return;
+}
+
 if (args.Length >= 1 && args[0] == "wakelive")
 {
     // The whole live path except the microphone itself: synthesised speech is
