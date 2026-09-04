@@ -441,13 +441,18 @@ export class Hologram {
   _drawAura(ctx, headX, headY, scale) {
     // SYNTAX uses S * 0.8. Clamped so a head sitting low in the canvas cannot
     // push the halo off the top, which would put a hard edge back.
-    const radius = Math.min(scale * 0.8, headY * 0.98);
+    // Tight to the head. At 0.8 it read as a huge black halo AROUND the head
+    // rather than something behind it: the job is contrast under the dots, and
+    // contrast only helps where there are dots.
+    const radius = Math.min(scale * 0.52, headY * 0.98);
     const depth = Math.min(1, this.head + this.rise * 0.5);
     if (depth < 0.01) return;
 
     const gradient = ctx.createRadialGradient(headX, headY, radius * 0.05, headX, headY, radius);
-    gradient.addColorStop(0.00, `rgba(0,0,0,${0.58 * depth})`);
-    gradient.addColorStop(0.58, `rgba(0,0,0,${0.30 * depth})`);
+    // Darker at the centre and gone sooner, so it reads as the head being lit
+    // rather than the panel being dimmed.
+    gradient.addColorStop(0.00, `rgba(0,0,0,${0.70 * depth})`);
+    gradient.addColorStop(0.45, `rgba(0,0,0,${0.34 * depth})`);
     gradient.addColorStop(1.00, 'rgba(0,0,0,0)');
 
     ctx.save();

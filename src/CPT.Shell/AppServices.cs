@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -136,6 +137,7 @@ public sealed class AppServices : IDisposable
         if (Settings.Agents.Active is { } startupAgent) ApplyAgentCli(startupAgent);
         else { ApplyCliOptions(); ApplyRewriteOptions(); }
 
+        ContinuousMicCapture.DeviceIndex = Settings.MicrophoneDevice;
         StartCloneWatchdog();
         WarmAcknowledgements();
     }
@@ -225,7 +227,7 @@ public sealed class AppServices : IDisposable
             _ = EnsureCloneReadyAsync(cancellationToken);
 
             // Answer first, work second: a minute of silence reads as being ignored.
-            await AcknowledgeAsync(cancellationToken).ConfigureAwait(false);
+            await AcknowledgeAsync(request, cancellationToken).ConfigureAwait(false);
 
             if (!Settings.Cli.KeepConversationContext) Cli.ResetConversation();
 
@@ -313,9 +315,9 @@ public sealed class AppServices : IDisposable
     /// clone and 47 s on a cold one, which would delay the very thing the
     /// acknowledgement exists to prevent; a cached line costs a file read.
     /// </summary>
-    private async Task AcknowledgeAsync(CancellationToken cancellationToken)
+    private async Task AcknowledgeAsync(string request, CancellationToken cancellationToken)
     {
-        var line = Acknowledgements.Ready(ActivePersona);
+        var line = Acknowledgements.ReadyFor(ActivePersona, request);
         if (line is not null)
         {
             try
@@ -536,7 +538,15 @@ public sealed class AppServices : IDisposable
             : agent.RewriteProviderId;
 
         RewriteCli.Select(rewriteProvider, directory);
-        RewriteCli.Options = agent.RewriteOptions;
+
+        // Unset rewrite options inherit the agent's, because the agent's are known
+        // to work: its model has been chosen and used. Left empty, the rewrite
+        // ran on the CLI's default model -- which this Claude Code refuses -- so
+        // every rewrite failed, every reply was spoken raw, and the persona was
+        // never heard at all.
+        RewriteCli.Options = agent.RewriteOptions.Count > 0 || rewriteProvider != agent.ProviderId
+            ? agent.RewriteOptions
+            : agent.Options;
 
         CptLog.Write($"[agent] {agent.Name}: answers on {agent.ProviderId}, speaks via {rewriteProvider}");
     }

@@ -40,6 +40,12 @@ public sealed class ContinuousMicCapture : IDisposable
     public static WaveFormat Format { get; } = new(SampleRate, BitsPerSample, Channels);
 
     /// <summary>True while the microphone is open.</summary>
+    /// <summary>
+    /// Which microphone to open. -1 takes the system default, which on a machine
+    /// with several devices is not necessarily one that hears anything.
+    /// </summary>
+    public static int DeviceIndex { get; set; } = AudioInputs.SystemDefault;
+
     public bool IsCapturing { get; private set; }
 
     /// <summary>Opens the microphone. Does nothing when already capturing.</summary>
@@ -52,6 +58,7 @@ public sealed class ContinuousMicCapture : IDisposable
 
             var device = new WaveInEvent
             {
+                DeviceNumber = Math.Max(0, DeviceIndex),
                 WaveFormat = Format,
                 BufferMilliseconds = FrameMilliseconds,
             };

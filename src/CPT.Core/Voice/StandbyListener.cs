@@ -57,6 +57,7 @@ public sealed class StandbyListener : IAsyncDisposable
     private const int FramesPerReport = 200;
 
     private int _framesSinceReport;
+    private int _idleTraces;
     private float _peakSinceReport;
     private DateTime _wokeAt = DateTime.MinValue;
     private Timer? _idleTimer;
@@ -119,7 +120,10 @@ public sealed class StandbyListener : IAsyncDisposable
         _lastSpeechAt = DateTime.UtcNow;
 
         _worker ??= Task.Run(() => ProcessTranscriptionsAsync(_stop.Token));
-        _idleTimer ??= new Timer(_ => CheckIdle(), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+        // Four times a second: the pause that ends a request is measured in
+        // seconds, so checking once a second added most of another one to it.
+        _idleTimer ??= new Timer(
+            _ => CheckIdle(), null, TimeSpan.FromMilliseconds(250), TimeSpan.FromMilliseconds(250));
 
         _microphone.Start();
         IsRunning = _microphone.IsCapturing;
@@ -146,6 +150,11 @@ public sealed class StandbyListener : IAsyncDisposable
         _detector.Reset();
         _lastSpeechAt = DateTime.UtcNow;
         _worker ??= Task.Run(() => ProcessTranscriptionsAsync(_stop.Token));
+
+        // The idle timer is what SENDS a finished request; without it a test
+        // would show a wake that never becomes anything.
+        _idleTimer ??= new Timer(
+            _ => CheckIdle(), null, TimeSpan.FromMilliseconds(250), TimeSpan.FromMilliseconds(250));
         IsRunning = true;
     }
 
@@ -327,7 +336,17 @@ public sealed class StandbyListener : IAsyncDisposable
 
     private void CheckIdle()
     {
-        if (!IsRunning || _machine.State != StandbyState.Listening) return;
+        if (!IsRunning) return;
+        if (_machine.State != StandbyState.Listening) return;
+
+        if (_idleTraces++ % 20 == 0)
+        {
+            var quiet = (DateTime.UtcNow - _lastSpeechAt).TotalSeconds;
+            CptLog.Write("[standby] awaiting the end of the request: "
+                + quiet.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)
+                + "s of " + _settings.SilenceTimeoutSeconds + "s silence, captured \""
+                + _machine.Captured + "\"");
+        }
 
         var now = DateTime.UtcNow;
 

@@ -27,36 +27,66 @@ namespace CPT.Core.Tts;
 /// </summary>
 public sealed class AcknowledgementCache : IDisposable
 {
+private readonly string _folder;    private readonly SemaphoreSlim _gate = new(1, 1);    private readonly Random _pick = new();    public AcknowledgementCache(string folder)    {        _folder = folder;        Directory.CreateDirectory(_folder);    }
     /// <summary>
-    /// What the agent says while it starts work. Short on purpose: this is a
-    /// held door, not a speech.
+    /// What the agent says while it starts work.
+    ///
+    /// Several, and chosen by what was ASKED, because "working on it" every
+    /// time tells the user nothing and sounds like a machine that did not
+    /// listen. These are pre-rendered per persona, so choosing between them
+    /// costs nothing at the moment it matters.
     /// </summary>
-    public static readonly IReadOnlyList<string> Lines =
+    private static readonly (string[] Words, string Line)[] Contextual =
     [
-        "Working on it.",
-        "On it.",
-        "Let me look.",
-        "One moment.",
+        (["build", "compile", "compiling", "msbuild"], "Checking the build."),
+        (["test", "tests", "testing", "spec", "specs"], "Running through the tests."),
+        (["error", "fail", "failed", "failing", "crash", "bug", "broken"], "Looking at what went wrong."),
+        (["git", "commit", "branch", "merge", "diff", "push"], "Checking the repository."),
+        (["file", "files", "folder", "directory", "path"], "Looking at the files."),
+        (["log", "logs", "output", "console"], "Reading the log."),
+        (["write", "add", "create", "make", "implement", "fix", "change", "update"], "Making the change."),
+        (["find", "search", "where", "look", "show", "list"], "Looking that up."),
+        (["explain", "why", "how", "what", "describe"], "Let me work that out."),
     ];
 
-    private readonly string _folder;
-    private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly Random _pick = new();
+    /// <summary>The general lines, used when nothing more specific fits.</summary>
+    private static readonly string[] General = ["Working on it.", "On it.", "One moment."];
 
-    public AcknowledgementCache(string folder)
+    /// <summary>Every line that gets pre-rendered for a persona.</summary>
+    public static IReadOnlyList<string> Lines { get; } =
+        [.. General, .. Contextual.Select(entry => entry.Line)];
+
+    /// <summary>
+    /// The line that fits a request, whether or not it has been rendered yet.
+    ///
+    /// Pure and public because this is the behaviour worth testing: which words
+    /// lead to which answer. Whether a file exists is a detail.
+    /// </summary>
+    public static string LineFor(string request)
     {
-        _folder = folder;
-        Directory.CreateDirectory(_folder);
+        var words = (request ?? "").Split(
+            [' ', ',', '.', '?', '!', ';', ':', '\n', '\r', '\t'],
+            StringSplitOptions.RemoveEmptyEntries);
+
+        foreach (var (keywords, line) in Contextual)
+        {
+            if (words.Any(word => keywords.Contains(word, StringComparer.OrdinalIgnoreCase)))
+                return line;
+        }
+
+        return General[0];
     }
 
-    /// <summary>A cached line for this persona, or null if none has been made yet.</summary>
-    public string? Ready(Persona persona)
+    /// <summary>
+    /// The rendered line that fits this request, or a general one, or nothing
+    /// if this persona has none rendered yet.
+    /// </summary>
+    public string? ReadyFor(Persona persona, string request)
     {
-        var available = Lines
-            .Select(line => PathFor(persona, line))
-            .Where(File.Exists)
-            .ToList();
+        var wanted = PathFor(persona, LineFor(request));
+        if (File.Exists(wanted)) return wanted;
 
+        var available = General.Select(line => PathFor(persona, line)).Where(File.Exists).ToList();
         return available.Count == 0 ? null : available[_pick.Next(available.Count)];
     }
 

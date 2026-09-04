@@ -114,7 +114,16 @@ public sealed class StandbySettings
     /// Send automatically after this many seconds of silence, so a forgotten send
     /// phrase does not leave CPT recording forever. Zero disables the timeout.
     /// </summary>
-    public int SilenceTimeoutSeconds { get; set; } = 8;
+    /// <summary>
+    /// How long a pause ends a request.
+    ///
+    /// Two seconds, because this is how long the user waits after finishing a
+    /// sentence before anything at all happens. It was eight, on a timer that
+    /// ticked once a second, so asking a question in one breath was followed by
+    /// up to nine seconds of silence -- which is indistinguishable from standby
+    /// not working, and is exactly what it was reported as.
+    /// </summary>
+    public int SilenceTimeoutSeconds { get; set; } = 2;
 
     /// <summary>Hard cap on one dictated request, after which it is sent as-is.</summary>
     public int MaxRequestSeconds { get; set; } = 120;
@@ -158,6 +167,13 @@ public sealed class AppSettings
     public string PiperModelsDir { get; set; } = "";
     public string WhisperPath { get; set; } = "whisper-cli";
     public string WhisperModelPath { get; set; } = "";
+
+    /// <summary>
+    /// Which microphone to listen to. -1 is the system default, which is not
+    /// always a device that hears anything: this machine offers five and only
+    /// one of them has a signal.
+    /// </summary>
+    public int MicrophoneDevice { get; set; } = -1;
     public string TtsEngine { get; set; } = "piper";   // piper | chatterbox
     public bool AutoDowngradeOnNoGpu { get; set; } = true;
 
@@ -192,6 +208,19 @@ public sealed class AppSettings
     /// <summary>Which CLI restates answers in the persona's voice, and how.</summary>
     public RewriteSettings Rewrite { get; set; } = new();
 
+
+    /// <summary>
+    /// Brings forward settings whose defaults have changed for a good reason.
+    ///
+    /// Only exact old defaults are touched: a value the user chose is theirs.
+    /// </summary>
+    private void Migrate()
+    {
+        // Eight seconds of silence before a request was sent felt like standby
+        // being broken. Anyone still on that value never picked it.
+        if (Standby.SilenceTimeoutSeconds == 8) Standby.SilenceTimeoutSeconds = 2;
+    }
+
     /// <summary>Location of the settings file.</summary>
     public static string FilePath { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -212,6 +241,8 @@ public sealed class AppSettings
                 var loaded = JsonSerializer.Deserialize<AppSettings>(text, ReadOptions);
                 if (loaded is not null)
                 {
+                    loaded.Migrate();
+
                     // Options added in a later version are simply absent from an
                     // older file, and take their default. Writing the file back
                     // whenever the round-trip differs keeps settings.json a

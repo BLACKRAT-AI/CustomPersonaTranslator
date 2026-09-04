@@ -308,7 +308,9 @@ if (args.Length >= 1 && args[0] == "wakelive")
     live.Captured += text => Console.WriteLine("[live] captured: " + text);
     live.Failed += message => Console.WriteLine("[live] FAILED: " + message);
     live.LevelChanged += _ => { };
-    live.RequestReady += (r, agent) => { request = r; addressed = agent; };
+    var sendClock = new System.Diagnostics.Stopwatch();
+    live.RequestReady += (r, agent) => { request = r; addressed = agent;
+        Console.WriteLine("[live] sent after " + sendClock.ElapsedMilliseconds + " ms of silence"); };
 
     live.StartWithoutMicrophoneForTest();
 
@@ -335,6 +337,7 @@ if (args.Length >= 1 && args[0] == "wakelive")
     }
 
     var silence = new byte[frameBytes];
+    sendClock.Start();
     for (var i = 0; i < 40; i++)
     {
         var verdict = probe.Process(0.0002f);
@@ -403,6 +406,72 @@ if (args.Length >= 1 && args[0] == "wake")
     Console.WriteLine(step.Outcome == CPT.Core.Voice.StandbyOutcome.Woke
         ? "[wake] the chain works: audio -> recognition -> wake."
         : "[wake] NOT woken. Recognition heard the line above; no configured phrase matched it.");
+    try { File.Delete(wav); } catch (IOException) { }
+    return;
+}
+
+if (args.Length >= 1 && args[0] == "standbyphysical")
+{
+    // The real thing: the real microphone, listening to the room, while the
+    // phrase is played out of the real speakers. Everything is production code
+    // and nothing is injected. This is the test that was never run.
+    //   dotnet run -- standbyphysical ["hey computer why did the build fail"]
+    var utterance = args.Length >= 2 ? args[1] : settings.Standby.WakePhrase + " why did the build fail";
+    var mouth = new PiperTts(settings.PiperPath, settings.PiperModelsDir);
+    var ears = new CPT.Core.Stt.WhisperCpp(settings.WhisperPath, settings.WhisperModelPath);
+
+    Console.WriteLine($"[phys] recognition = {ears.IsAvailable}, model = {Path.GetFileName(ears.ModelPath)}");
+
+    await using var live = new CPT.Core.Voice.StandbyListener(ears, settings.Standby);
+    live.ExtraWakePhrases = settings.Agents.Agents
+        .SelectMany(a => a.TriggerPhrases.Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => (p, a.Id)))
+        .ToList();
+
+    var woke = false;
+    string? request = null;
+    string? who = null;
+    live.Woke += () => { woke = true; Console.WriteLine("[phys] WOKE"); };
+    live.Captured += text => Console.WriteLine("[phys] captured: " + text);
+    live.Failed += message => Console.WriteLine("[phys] FAILED: " + message);
+    live.RequestReady += (r, agent) => { request = r; who = agent; };
+
+    live.Start();
+    if (!live.IsRunning) { Console.WriteLine("[phys] the microphone did not open"); return; }
+
+    Console.WriteLine($"[phys] listening. Playing \"{utterance}\" out loud in 1s…");
+    await Task.Delay(1000);
+
+    // Out of the speakers, at a level the microphone can hear.
+    var speech = new System.IO.MemoryStream();
+    await foreach (var chunk in mouth.SynthesizeStreamAsync(utterance, "en_US-amy-medium"))
+        speech.Write(chunk, 0, chunk.Length);
+
+    var wav = Path.Combine(Path.GetTempPath(), "cpt_physical.wav");
+    using (var writer = new NAudio.Wave.WaveFileWriter(wav,
+        new NAudio.Wave.WaveFormat(mouth.SampleRate, mouth.BitsPerSample, mouth.Channels)))
+    {
+        writer.Write(speech.ToArray(), 0, (int)speech.Length);
+    }
+
+    using (var reader = new NAudio.Wave.AudioFileReader(wav) { Volume = 1.0f })
+    using (var speaker = new NAudio.Wave.WaveOutEvent())
+    {
+        speaker.Init(reader);
+        speaker.Play();
+        while (speaker.PlaybackState == NAudio.Wave.PlaybackState.Playing) await Task.Delay(100);
+    }
+
+    Console.WriteLine("[phys] played. Waiting for recognition…");
+    await Task.Delay(12000);
+    live.Stop();
+
+    Console.WriteLine($"[phys] woke      = {woke}");
+    Console.WriteLine($"[phys] request   = {request ?? "(none)"}");
+    Console.WriteLine($"[phys] addressed = {who ?? "(the general phrase)"}");
+    Console.WriteLine(woke || request is not null
+        ? "[phys] STANDBY WORKS through a real microphone."
+        : "[phys] standby did NOT wake. The room, the speakers or the microphone did not carry it.");
+
     try { File.Delete(wav); } catch (IOException) { }
     return;
 }
@@ -494,6 +563,60 @@ if (args.Length >= 1 && args[0] == "levels")
         : peak < 0.05f
             ? "[levels] events fire but the level never rises — the tap is not seeing the audio"
             : "[levels] levels track the audio; the mouth has what it needs");
+    return;
+}
+
+if (args.Length >= 1 && args[0] == "devices")
+{
+    // Which microphone is Windows actually giving us, and is anything arriving
+    // on it? A gate cannot help a device that delivers silence.
+    //   dotnet run -- devices [seconds]
+    var listen = args.Length >= 2 ? int.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture) : 3;
+
+    Console.WriteLine($"[dev] capture devices: {NAudio.Wave.WaveInEvent.DeviceCount}");
+    for (var device = 0; device < NAudio.Wave.WaveInEvent.DeviceCount; device++)
+    {
+        var info = NAudio.Wave.WaveInEvent.GetCapabilities(device);
+        var peak = 0f;
+        double sum = 0;
+        var frames = 0;
+
+        using (var capture = new NAudio.Wave.WaveInEvent
+        {
+            DeviceNumber = device,
+            WaveFormat = new NAudio.Wave.WaveFormat(16000, 16, 1),
+            BufferMilliseconds = 50,
+        })
+        {
+            capture.DataAvailable += (_, e) =>
+            {
+                var pcm = new byte[e.BytesRecorded];
+                Buffer.BlockCopy(e.Buffer, 0, pcm, 0, e.BytesRecorded);
+                var level = CPT.Core.Stt.PcmLevel.RootMeanSquare(pcm);
+                frames++;
+                sum += level;
+                if (level > peak) peak = level;
+            };
+
+            try
+            {
+                capture.StartRecording();
+                await Task.Delay(TimeSpan.FromSeconds(listen));
+                capture.StopRecording();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[dev] {device}: {info.ProductName} — could not open: {ex.Message}");
+                continue;
+            }
+        }
+
+        var verdict = peak < 0.0005 ? "SILENT" : peak < 0.01 ? "very quiet" : "signal";
+        Console.WriteLine($"[dev] {device}: {info.ProductName,-34} frames {frames,3}  "
+            + $"peak {peak:0.#####}  mean {(frames == 0 ? 0 : sum / frames):0.#####}  {verdict}");
+    }
+
+    Console.WriteLine("[dev] a SILENT device is muted, disconnected, or not the one you speak into.");
     return;
 }
 

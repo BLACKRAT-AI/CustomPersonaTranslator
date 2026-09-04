@@ -24,7 +24,12 @@ public sealed class MicCapture : IDisposable
         _file = new FileStream(_tmpPath, FileMode.Create);
         _writer = new WaveFileWriter(_file, new WaveFormat(16000, 16, 1));
 
-        _wave = new WaveInEvent { WaveFormat = new WaveFormat(16000, 16, 1), BufferMilliseconds = 50 };
+        _wave = new WaveInEvent
+        {
+            DeviceNumber = Math.Max(0, ContinuousMicCapture.DeviceIndex),
+            WaveFormat = new WaveFormat(16000, 16, 1),
+            BufferMilliseconds = 50,
+        };
         _wave.DataAvailable += (_, e) => _writer?.Write(e.Buffer, 0, e.BytesRecorded);
         _wave.StartRecording();
         _capturing = true;
