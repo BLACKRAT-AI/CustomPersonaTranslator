@@ -13,6 +13,93 @@ using CPT.Core.Tts;
 
 var settings = AppSettings.Load();
 
+if (args.Length >= 1 && args[0] == "phrase")
+{
+    // Feeds a transcript straight to the wake rules, so a line copied out of
+    // the log can be checked in a second.
+    //   dotnet run -- phrase "A computer."
+    var line = args.Length >= 2 ? args[1] : "A computer.";
+    var rules = new CPT.Core.Voice.StandbyStateMachine(settings.Standby);
+    rules.ExtraWakePhrases = settings.Agents.Agents
+        .Where(a => !string.IsNullOrWhiteSpace(a.TriggerPhrase))
+        .Select(a => (a.TriggerPhrase, a.Id))
+        .ToList();
+
+    Console.WriteLine($"[phrase] phrases : \"{settings.Standby.WakePhrase}\""
+        + string.Concat(rules.ExtraWakePhrases.Select(p => $", \"{p.Phrase}\"")));
+    Console.WriteLine($"[phrase] heard   : \"{line}\"");
+
+    var outcome = rules.Consume(line);
+    Console.WriteLine($"[phrase] outcome : {outcome.Outcome}"
+        + (outcome.WokeBy is null ? "" : $"  (agent {outcome.WokeBy})")
+        + (outcome.Captured.Length == 0 ? "" : $"  captured \"{outcome.Captured}\""));
+    return;
+}
+
+if (args.Length >= 1 && args[0] == "quiet")
+{
+    // Does a quiet microphone break recognition? Synthesise a phrase, attenuate
+    // it to the level measured on this machine, and transcribe it both as-is
+    // and normalised.
+    //   dotnet run -- quiet ["hey computer"] [peak]
+    var phrase = args.Length >= 2 ? args[1] : "hey computer why did the build fail";
+    var targetPeak = args.Length >= 3
+        ? float.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture)
+        : 0.0077f;
+
+    var voice = new PiperTts(settings.PiperPath, settings.PiperModelsDir);
+    var ears = new CPT.Core.Stt.WhisperCpp(settings.WhisperPath, settings.WhisperModelPath);
+
+    var raw = new System.IO.MemoryStream();
+    await foreach (var chunk in voice.SynthesizeStreamAsync(phrase, "en_US-amy-medium"))
+        raw.Write(chunk, 0, chunk.Length);
+    var samples = raw.ToArray();
+
+    static float PeakOf(byte[] pcm)
+    {
+        var peak = 0f;
+        for (var i = 0; i + 1 < pcm.Length; i += 2)
+        {
+            var value = Math.Abs((short)(pcm[i] | (pcm[i + 1] << 8))) / 32768f;
+            if (value > peak) peak = value;
+        }
+        return peak;
+    }
+
+    static byte[] Scale(byte[] pcm, float factor)
+    {
+        var scaled = new byte[pcm.Length];
+        for (var i = 0; i + 1 < pcm.Length; i += 2)
+        {
+            var value = (short)Math.Clamp((short)(pcm[i] | (pcm[i + 1] << 8)) * factor, short.MinValue, short.MaxValue);
+            scaled[i] = (byte)(value & 0xFF);
+            scaled[i + 1] = (byte)((value >> 8) & 0xFF);
+        }
+        return scaled;
+    }
+
+    async Task<string> Hear(byte[] pcm, string label)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cpt_quiet_{label}.wav");
+        using (var writer = new NAudio.Wave.WaveFileWriter(path,
+            new NAudio.Wave.WaveFormat(voice.SampleRate, voice.BitsPerSample, voice.Channels)))
+        {
+            writer.Write(pcm, 0, pcm.Length);
+        }
+        var heard = await ears.TranscribeAsync(path);
+        try { File.Delete(path); } catch (IOException) { }
+        return heard;
+    }
+
+    var attenuated = Scale(samples, targetPeak / Math.Max(0.0001f, PeakOf(samples)));
+    var restored = Scale(attenuated, 0.7f / Math.Max(0.0001f, PeakOf(attenuated)));
+
+    Console.WriteLine($"[quiet] said            : \"{phrase}\"");
+    Console.WriteLine($"[quiet] at peak {targetPeak:0.####} : \"{await Hear(attenuated, "low")}\"");
+    Console.WriteLine($"[quiet] normalised      : \"{await Hear(restored, "norm")}\"");
+    return;
+}
+
 if (args.Length >= 1 && args[0] == "wakelive")
 {
     // The whole live path except the microphone itself: synthesised speech is

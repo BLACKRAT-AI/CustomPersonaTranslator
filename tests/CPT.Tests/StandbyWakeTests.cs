@@ -92,4 +92,61 @@ public class StandbyWakeTests
         Assert.Equal(StandbyOutcome.Ignored, machine.Consume("hello there").Outcome);
         Assert.Equal(StandbyOutcome.Woke, machine.Consume("hey agent hello").Outcome);
     }
+
+    /// <summary>
+    /// Taken verbatim from the log of a session that would not wake: the user
+    /// said "hey computer" and recognition returned "A computer.".
+    /// </summary>
+    [Theory]
+    [InlineData("A computer.")]
+    [InlineData("Hey computer")]
+    [InlineData("hey, computer!")]
+    [InlineData("Computer")]
+    public void A_mangled_interjection_still_wakes_the_agent(string heard)
+    {
+        var machine = Machine(("hey computer", "a1"));
+
+        Assert.Equal(StandbyOutcome.Woke, machine.Consume(heard).Outcome);
+    }
+
+    [Fact]
+    public void The_rest_of_the_sentence_survives_a_mangled_interjection()
+    {
+        var machine = Machine(("hey computer", "a1"));
+
+        var step = machine.Consume("A computer, why did the build fail?");
+
+        Assert.Equal("a1", step.WokeBy);
+        Assert.Equal("why did the build fail", step.Captured);
+    }
+
+    /// <summary>
+    /// Leniency at the FRONT only. The distinctive word appearing later in a
+    /// sentence is someone talking about the agent, not to it.
+    /// </summary>
+    [Theory]
+    [InlineData("ask the computer why it failed")]
+    [InlineData("I told my computer to stop")]
+    [InlineData("the build ran on that computer")]
+    public void The_distinctive_word_alone_does_not_wake_it_mid_sentence(string heard)
+    {
+        var machine = Machine(("hey computer", "a1"));
+
+        Assert.Equal(StandbyOutcome.Ignored, machine.Consume(heard).Outcome);
+    }
+
+    /// <summary>
+    /// Only words that SOUND like the interjection are forgiven. "okay" does not
+    /// sound like "hey", and forgiving everything short would wake the agent on
+    /// half the sentences in a room.
+    /// </summary>
+    [Theory]
+    [InlineData("my computer")]
+    [InlineData("that computer")]
+    public void A_word_that_sounds_nothing_like_the_interjection_is_not_forgiven(string heard)
+    {
+        var machine = Machine(("hey computer", "a1"));
+
+        Assert.Equal(StandbyOutcome.Ignored, machine.Consume(heard).Outcome);
+    }
 }

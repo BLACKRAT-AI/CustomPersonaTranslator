@@ -127,7 +127,7 @@ public sealed class StandbyStateMachine
         {
             if (string.IsNullOrWhiteSpace(phrase)) return;
 
-            var remainder = PhraseMatcher.TextAfter(transcript, phrase);
+            var remainder = PhraseMatcher.TextAfterLenient(transcript, phrase);
             if (remainder is null) return;
 
             var length = PhraseMatcher.Tokenize(phrase).Length;
