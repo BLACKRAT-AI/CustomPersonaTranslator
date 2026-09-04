@@ -448,6 +448,7 @@ public sealed class AppServices : IDisposable
     /// <summary>Re-reads the agent list after it has been edited in settings.</summary>
     public void ReloadAgents()
     {
+        PublishWakePhrases();
         if (Settings.Agents.Active is { } agent) ApplyAgentCli(agent);
         OnAgentsChanged?.Invoke();
     }
@@ -468,7 +469,15 @@ public sealed class AppServices : IDisposable
         : _standby.State == CPT.Core.Voice.StandbyState.Listening ? StandbyUiState.Listening
         : StandbyUiState.Sleeping;
 
-    public string WakePhrase => Settings.Standby.WakePhrase;
+    /// <summary>
+    /// The phrase to say to wake THIS agent.
+    ///
+    /// Its own if it has one: the bar telling the user to say "hey agent" when
+    /// they had configured "hey computer" was telling them to say the wrong
+    /// thing.
+    /// </summary>
+    public string WakePhrase =>
+        ActiveAgent?.TriggerPhrase is { Length: > 0 } phrase ? phrase : Settings.Standby.WakePhrase;
     public string SendPhrase => Settings.Standby.SendPhrase;
 
     /// <summary>Turns hands-free listening on or off and remembers the choice.</summary>
@@ -513,13 +522,36 @@ public sealed class AppServices : IDisposable
         listener.Cancelled += () => OnStandbyStateChanged?.Invoke(StandbyUiState.Sleeping);
         listener.LevelChanged += level => OnAudioLevel?.Invoke(level);
         listener.Failed += message => OnNotification?.Invoke(message);
-        listener.RequestReady += request =>
+        listener.RequestReady += (request, addressed) =>
         {
             OnStandbyStateChanged?.Invoke(StandbyUiState.Sleeping);
+
+            // Whoever was named is who answers. Without this, saying an agent's
+            // own phrase woke the app and then handed the question to whichever
+            // agent happened to be selected.
+            if (addressed is { Length: > 0 }) SetActiveAgent(addressed);
             _ = RouteRequestAsync(request);
         };
 
         return listener;
+    }
+
+    /// <summary>
+    /// Tells the listener every phrase that should wake it: the general one and
+    /// each agent's own. Called whenever the agent list changes.
+    /// </summary>
+    private void PublishWakePhrases()
+    {
+        if (_standby is null) return;
+
+        var phrases = Settings.Agents.Agents
+            .Where(agent => !string.IsNullOrWhiteSpace(agent.TriggerPhrase))
+            .Select(agent => (agent.TriggerPhrase, agent.Id))
+            .ToList();
+
+        _standby.ExtraWakePhrases = phrases;
+        CptLog.Write($"[standby] wake phrases: \"{Settings.Standby.WakePhrase}\""
+            + string.Concat(phrases.Select(p => $", \"{p.TriggerPhrase}\"")));
     }
 
     /// <summary>

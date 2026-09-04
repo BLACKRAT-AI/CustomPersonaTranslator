@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Linq;
 using CPT.Core.Filter;
 using CPT.Core.Llm;
 using CPT.Core.Models;
@@ -11,6 +12,54 @@ using CPT.Core.Settings;
 using CPT.Core.Tts;
 
 var settings = AppSettings.Load();
+
+if (args.Length >= 1 && args[0] == "wake")
+{
+    // Proves the whole wake chain with real audio and real recognition, and
+    // without needing anyone to speak: synthesise the phrase, transcribe it,
+    // and see whether the machine wakes on what came back.
+    //   dotnet run -- wake ["hey computer what is the build status"]
+    var wakeLine = args.Length >= 2 ? args[1] : settings.Standby.WakePhrase + " what is the build status";
+    var piper = new PiperTts(settings.PiperPath, settings.PiperModelsDir);
+    var whisper = new CPT.Core.Stt.WhisperCpp(settings.WhisperPath, settings.WhisperModelPath);
+
+    Console.WriteLine($"[wake] saying    : \"{wakeLine}\"");
+
+    var wav = Path.Combine(Path.GetTempPath(), "cpt_wake_probe.wav");
+    var pcm = new System.IO.MemoryStream();
+    await foreach (var chunk in piper.SynthesizeStreamAsync(wakeLine, "en_US-amy-medium"))
+        pcm.Write(chunk, 0, chunk.Length);
+
+    using (var writer = new NAudio.Wave.WaveFileWriter(
+        wav, new NAudio.Wave.WaveFormat(piper.SampleRate, piper.BitsPerSample, piper.Channels)))
+    {
+        writer.Write(pcm.ToArray(), 0, (int)pcm.Length);
+    }
+
+    var heard = await whisper.TranscribeAsync(wav);
+    Console.WriteLine($"[wake] heard back: \"{heard}\"");
+
+    var machine = new CPT.Core.Voice.StandbyStateMachine(settings.Standby);
+    var agents = settings.Agents.Agents
+        .Where(a => !string.IsNullOrWhiteSpace(a.TriggerPhrase))
+        .Select(a => (a.TriggerPhrase, a.Id))
+        .ToList();
+    machine.ExtraWakePhrases = agents;
+
+    Console.WriteLine($"[wake] phrases   : \"{settings.Standby.WakePhrase}\""
+        + string.Concat(agents.Select(a => $", \"{a.TriggerPhrase}\"")));
+
+    var step = machine.Consume(heard);
+    Console.WriteLine($"[wake] outcome   : {step.Outcome}"
+        + (step.WokeBy is null ? "" : $"  (agent {step.WokeBy})")
+        + (step.Captured.Length == 0 ? "" : $"  captured \"{step.Captured}\""));
+
+    Console.WriteLine(step.Outcome == CPT.Core.Voice.StandbyOutcome.Woke
+        ? "[wake] the chain works: audio -> recognition -> wake."
+        : "[wake] NOT woken. Recognition heard the line above; no configured phrase matched it.");
+    try { File.Delete(wav); } catch (IOException) { }
+    return;
+}
 
 if (args.Length >= 1 && args[0] == "standby")
 {
@@ -35,7 +84,8 @@ if (args.Length >= 1 && args[0] == "standby")
     listener.Captured += captured => Console.WriteLine("[standby] captured: " + captured);
     listener.Cancelled += () => Console.WriteLine("[standby] cancelled");
     listener.Failed += message => Console.WriteLine("[standby] FAILED: " + message);
-    listener.RequestReady += request => Console.WriteLine("[standby] REQUEST: " + request);
+    listener.RequestReady += (request, agent) =>
+        Console.WriteLine("[standby] REQUEST: " + request + (agent is null ? "" : "   (agent " + agent + ")"));
 
     listener.Start();
     if (!listener.IsRunning) { Console.WriteLine("[standby] the microphone did not open"); return; }

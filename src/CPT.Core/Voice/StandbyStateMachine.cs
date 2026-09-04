@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using CPT.Core.Diagnostics;
 using System.Text;
 using CPT.Core.Settings;
 
@@ -37,14 +39,18 @@ public enum StandbyOutcome
 /// <param name="Outcome">What happened.</param>
 /// <param name="Request">The complete request, set only when <paramref name="Outcome"/> is Send.</param>
 /// <param name="Captured">Everything captured so far, for live display.</param>
-public readonly record struct StandbyStep(StandbyOutcome Outcome, string? Request, string Captured);
+/// <param name="WokeBy">Which phrase woke it, so the caller knows who was addressed.</param>
+public readonly record struct StandbyStep(
+    StandbyOutcome Outcome, string? Request, string Captured, string? WokeBy = null);
 
 /// <summary>
 /// The conversation rules of standby mode, with no audio or timers attached.
 ///
-/// The user speaks a wake phrase to start ("hey agent"), dictates, and speaks a
-/// send phrase to finish ("send it"). Both phrases are configurable, so nothing
-/// here may assume particular words.
+/// The user speaks a wake phrase to start, dictates, and speaks a send phrase to
+/// finish. ANY of several phrases can wake it: the general one from settings,
+/// and each agent's own. Saying an agent's name is the natural way to address
+/// it, and requiring "hey agent" first and the agent's name second was two
+/// passwords for one door.
 ///
 /// Everything is decided from transcript text alone, which keeps the rules
 /// testable and means a mis-heard word can never leave the machine in a state the
@@ -54,11 +60,18 @@ public sealed class StandbyStateMachine
 {
     private readonly StandbySettings _settings;
     private readonly StringBuilder _captured = new();
+    private string? _wokeBy;
 
     public StandbyStateMachine(StandbySettings settings)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
     }
+
+    /// <summary>
+    /// Extra phrases that also wake it, each with the id of whoever owns it.
+    /// Set by the host whenever the agent list changes.
+    /// </summary>
+    public IReadOnlyList<(string Phrase, string Owner)> ExtraWakePhrases { get; set; } = [];
 
     public StandbyState State { get; private set; } = StandbyState.Sleeping;
 
@@ -93,22 +106,57 @@ public sealed class StandbyStateMachine
     {
         State = StandbyState.Sleeping;
         _captured.Clear();
+        _wokeBy = null;
     }
 
+    /// <summary>
+    /// Looks for any wake phrase at all.
+    ///
+    /// The longest match wins, so an agent called with "hey computer" is not
+    /// swallowed by a general "hey" — the more specific address is the one the
+    /// user meant.
+    /// </summary>
     private StandbyStep ConsumeWhileSleeping(string transcript)
     {
-        var afterWake = PhraseMatcher.TextAfter(transcript, _settings.WakePhrase);
-        if (afterWake is null) return Step(StandbyOutcome.Ignored);
+        string? bestRemainder = null;
+        string? bestPhrase = null;
+        string? bestOwner = null;
+        var bestLength = 0;
+
+        void Consider(string? phrase, string? owner)
+        {
+            if (string.IsNullOrWhiteSpace(phrase)) return;
+
+            var remainder = PhraseMatcher.TextAfter(transcript, phrase);
+            if (remainder is null) return;
+
+            var length = PhraseMatcher.Tokenize(phrase).Length;
+            if (length <= bestLength) return;
+
+            bestRemainder = remainder;
+            bestPhrase = phrase;
+            bestOwner = owner;
+            bestLength = length;
+        }
+
+        Consider(_settings.WakePhrase, null);
+        foreach (var (phrase, owner) in ExtraWakePhrases) Consider(phrase, owner);
+
+        if (bestRemainder is null) return Step(StandbyOutcome.Ignored);
 
         State = StandbyState.Listening;
         _captured.Clear();
+        _wokeBy = bestOwner;
+
+        CptLog.Write($"[standby] woke on \"{bestPhrase}\""
+            + (bestOwner is null ? "" : " for agent " + bestOwner));
 
         // The wake phrase and the request usually arrive in one breath -- "hey
-        // agent, what changed in this file" -- so whatever followed it is already
-        // the beginning of the request.
-        return string.IsNullOrWhiteSpace(afterWake)
+        // computer, what changed in this file" -- so whatever followed it is
+        // already the beginning of the request.
+        return string.IsNullOrWhiteSpace(bestRemainder)
             ? Step(StandbyOutcome.Woke)
-            : ApplyDictation(afterWake, StandbyOutcome.Woke);
+            : ApplyDictation(bestRemainder, StandbyOutcome.Woke);
     }
 
     private StandbyStep ConsumeWhileListening(string transcript)
@@ -149,15 +197,17 @@ public sealed class StandbyStateMachine
     private StandbyStep Complete()
     {
         var request = _captured.ToString();
+        var owner = _wokeBy;
         Reset();
-        return new StandbyStep(StandbyOutcome.Send, request, request);
+        return new StandbyStep(StandbyOutcome.Send, request, request, owner);
     }
 
     private StandbyStep Cancel()
     {
         Reset();
+        _wokeBy = null;
         return new StandbyStep(StandbyOutcome.Cancelled, null, "");
     }
 
-    private StandbyStep Step(StandbyOutcome outcome) => new(outcome, null, Captured);
+    private StandbyStep Step(StandbyOutcome outcome) => new(outcome, null, Captured, _wokeBy);
 }

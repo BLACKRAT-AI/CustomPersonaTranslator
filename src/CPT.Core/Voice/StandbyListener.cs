@@ -59,7 +59,8 @@ public sealed class StandbyListener : IAsyncDisposable
     public event Action<string>? Captured;
 
     /// <summary>Raised with the finished request, ready to send to the agent.</summary>
-    public event Action<string>? RequestReady;
+    /// <summary>The dictated request, and the id of the agent addressed (null for the general phrase).</summary>
+    public event Action<string, string?>? RequestReady;
 
     /// <summary>Raised when a request is abandoned, by phrase or by timeout.</summary>
     public event Action? Cancelled;
@@ -86,6 +87,16 @@ public sealed class StandbyListener : IAsyncDisposable
 
     /// <summary>Whether the listener is waiting for its wake phrase or dictating.</summary>
     public StandbyState State => _machine.State;
+
+    /// <summary>
+    /// Phrases that also wake it, beyond the one in settings: each agent's own,
+    /// with its id. Saying an agent's name is how a person addresses it.
+    /// </summary>
+    public IReadOnlyList<(string Phrase, string Owner)> ExtraWakePhrases
+    {
+        get => _machine.ExtraWakePhrases;
+        set => _machine.ExtraWakePhrases = value;
+    }
 
     /// <summary>Starts listening. Does nothing when already running.</summary>
     public void Start()
@@ -266,7 +277,7 @@ public sealed class StandbyListener : IAsyncDisposable
 
             case StandbyOutcome.Send:
                 _wokeAt = DateTime.MinValue;
-                if (step.Request is { Length: > 0 } request) RequestReady?.Invoke(request);
+                if (step.Request is { Length: > 0 } request) RequestReady?.Invoke(request, step.WokeBy);
                 break;
 
             case StandbyOutcome.Cancelled:
