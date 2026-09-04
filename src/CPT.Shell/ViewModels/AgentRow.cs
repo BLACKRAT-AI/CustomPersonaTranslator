@@ -31,6 +31,9 @@ public sealed class AgentRow : ObservableObject
         Providers = providers;
         Personas = personas;
 
+        Phrases = new PhraseList(agent.TriggerPhrases);
+        Phrases.Rows.CollectionChanged += (_, _) => RefreshSetup();
+
         BuildOptions();
         BuildRewriteOptions();
     }
@@ -53,11 +56,8 @@ public sealed class AgentRow : ObservableObject
         set { _agent.Name = value; Raise(); }
     }
 
-    public string TriggerPhrase
-    {
-        get => _agent.TriggerPhrase;
-        set { _agent.TriggerPhrase = value; Raise(); RefreshSetup(); }
-    }
+    /// <summary>Every phrase that summons this agent.</summary>
+    public PhraseList Phrases { get; }
 
     /// <summary>
     /// The chosen ids, and what the pickers bind to.
@@ -123,9 +123,9 @@ public sealed class AgentRow : ObservableObject
 
             if (!CliReady) return $"{Provider?.DisplayName ?? "The CLI"} is not linked yet.";
 
-            return string.IsNullOrWhiteSpace(TriggerPhrase)
-                ? "Ready. Add a phrase to summon it by voice."
-                : $"Ready. Say “{TriggerPhrase}” to ask it something.";
+            return _agent.TriggerPhrases.Count == 0
+                ? "Ready. Record a phrase to summon it by voice."
+                : $"Ready. Say “{_agent.TriggerPhrases[0]}” to ask it something.";
         }
     }
 

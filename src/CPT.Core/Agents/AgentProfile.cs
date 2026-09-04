@@ -49,10 +49,30 @@ public sealed class AgentProfile
     public string PersonaId { get; set; } = "";
 
     /// <summary>
-    /// Spoken phrase that routes the rest of the sentence to this agent, e.g.
-    /// "ask claude". Empty means the agent can only be picked by hand.
+    /// Spoken phrases that summon this agent, e.g. "hey computer".
+    ///
+    /// A list, because one phrase is a guess at what a recogniser will produce
+    /// from one person's voice and microphone, and the guess is often wrong.
+    /// Recording several — including whatever it actually heard — is how you
+    /// stop guessing. Empty means the agent can only be picked by hand.
     /// </summary>
-    public string TriggerPhrase { get; set; } = "";
+    public List<string> TriggerPhrases { get; set; } = [];
+
+    /// <summary>
+    /// The single phrase this used to hold. Kept so older settings still load,
+    /// and folded into the list on the way in.
+    /// </summary>
+    public string TriggerPhrase
+    {
+        get => TriggerPhrases.Count > 0 ? TriggerPhrases[0] : "";
+        set
+        {
+            if (string.IsNullOrWhiteSpace(value)) return;
+            if (!TriggerPhrases.Exists(p => string.Equals(p, value, StringComparison.OrdinalIgnoreCase)))
+                TriggerPhrases.Insert(0, value.Trim());
+        }
+    }
+
 
     /// <summary>
     /// Directory this agent's CLI runs turns in. Empty follows the global

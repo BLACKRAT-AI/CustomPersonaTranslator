@@ -57,6 +57,7 @@ public partial class SettingsWindow : Window
     {
         InitializeComponent();
         _services = services ?? throw new ArgumentNullException(nameof(services));
+        _recorder = new PhraseRecorder(_services);
 
         CliOptions.ItemsSource = _optionRows;
         PersonaList.ItemsSource = _personaRows;
@@ -116,6 +117,71 @@ public partial class SettingsWindow : Window
 
     // --- loading ----------------------------------------------------------
 
+
+
+    // --- phrases ----------------------------------------------------------
+
+    private readonly PhraseRecorder _recorder;
+
+    /// <summary>
+    /// Records a phrase and adds what was HEARD, not what was meant.
+    ///
+    /// This is the answer to a recogniser that turns "hey computer" into
+    /// "A computer.": stop guessing what it will produce and store what it
+    /// does produce, from this microphone and this voice.
+    /// </summary>
+    private async void OnRecordAgentPhrase(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button) return;
+        if (button.DataContext is not AgentRow row) return;
+
+        var heard = await _recorder.ToggleAsync(button);
+        if (heard is null) return;
+
+        row.Phrases.Add(heard);
+        SaveAgents();
+    }
+
+    private void OnAddAgentPhrase(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not AgentRow row) return;
+
+        row.Phrases.Add("new phrase");
+        SaveAgents();
+    }
+
+    private void OnRemoveAgentPhrase(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not PhraseRow phrase) return;
+
+        foreach (var row in _agentRows) row.Phrases.Remove(phrase);
+        SaveAgents();
+    }
+
+    /// <summary>Records straight into one of the standby phrase boxes.</summary>
+    private async void OnRecordStandbyPhrase(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button) return;
+
+        var heard = await _recorder.ToggleAsync(button);
+        if (heard is null) return;
+
+        var target = button.Tag as string;
+        var box = target switch
+        {
+            "wake" => WakePhrase,
+            "send" => SendPhrase,
+            "cancel" => CancelPhrase,
+            _ => null,
+        };
+
+        if (box is null) return;
+
+        // Wake accepts several; the others are one line each.
+        box.Text = target == "wake" && box.Text.Trim().Length > 0
+            ? box.Text.TrimEnd().TrimEnd(',') + ", " + heard
+            : heard;
+    }
 
     // --- agents -----------------------------------------------------------
 
@@ -287,7 +353,10 @@ public partial class SettingsWindow : Window
         LoadAgents();
 
         StandbyEnabled.IsChecked = settings.Standby.Enabled;
-        WakePhrase.Text = settings.Standby.WakePhrase;
+        // Several, comma separated: what a recogniser makes of one voice is not
+        // always what was typed, so more than one spelling of the same phrase is
+        // often what makes it match.
+        WakePhrase.Text = string.Join(", ", settings.Standby.WakePhrases);
         SendPhrase.Text = settings.Standby.SendPhrase;
         CancelPhrase.Text = settings.Standby.CancelPhrase;
         SilenceTimeout.Text = Format(settings.Standby.SilenceTimeoutSeconds);
@@ -354,6 +423,26 @@ public partial class SettingsWindow : Window
             _personaRows.Add(new PersonaRow(persona, persona.Id == activeId));
     }
 
+
+    /// <summary>
+    /// Replaces a phrase list from a comma-separated box, and says whether it
+    /// changed so standby can be rebuilt only when it needs to be.
+    /// </summary>
+    private static bool AssignPhrases(string text, List<string> stored, string fallback)
+    {
+        var wanted = text
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (wanted.Count == 0) wanted.Add(fallback);
+        if (wanted.SequenceEqual(stored, StringComparer.OrdinalIgnoreCase)) return false;
+
+        stored.Clear();
+        stored.AddRange(wanted);
+        return true;
+    }
+
     // --- saving -----------------------------------------------------------
 
     private async void OnSave(object sender, RoutedEventArgs e)
@@ -370,7 +459,7 @@ public partial class SettingsWindow : Window
         // Phrases are compared word by word, so surrounding whitespace is
         // meaningless -- trim it rather than storing it.
         var standbyChanged =
-            Assign(WakePhrase.Text, settings.Standby.WakePhrase, v => settings.Standby.WakePhrase = v, "hey agent")
+            AssignPhrases(WakePhrase.Text, settings.Standby.WakePhrases, "hey agent")
             | Assign(SendPhrase.Text, settings.Standby.SendPhrase, v => settings.Standby.SendPhrase = v, "send it")
             | Assign(CancelPhrase.Text, settings.Standby.CancelPhrase, v => settings.Standby.CancelPhrase = v, "never mind")
             | AssignInt(SilenceTimeout.Text, settings.Standby.SilenceTimeoutSeconds, 0, 300,

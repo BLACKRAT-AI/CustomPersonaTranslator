@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Collections.Generic;
 using System.Text.Json;
 using CPT.Core.Diagnostics;
 
@@ -82,7 +83,26 @@ public sealed class StandbySettings
     public bool Enabled { get; set; }
 
     /// <summary>Phrase that starts capturing a request, e.g. "hey agent".</summary>
-    public string WakePhrase { get; set; } = "hey agent";
+    /// <summary>
+    /// Phrases that wake standby.
+    ///
+    /// A list for the same reason an agent's is: what a recogniser produces from
+    /// a given voice and microphone is not always what was typed, and recording
+    /// a few removes the guesswork.
+    /// </summary>
+    public List<string> WakePhrases { get; set; } = ["hey agent"];
+
+    /// <summary>The single phrase this used to hold, so older settings still load.</summary>
+    public string WakePhrase
+    {
+        get => WakePhrases.Count > 0 ? WakePhrases[0] : "";
+        set
+        {
+            if (string.IsNullOrWhiteSpace(value)) return;
+            if (!WakePhrases.Exists(p => string.Equals(p, value, StringComparison.OrdinalIgnoreCase)))
+                WakePhrases.Insert(0, value.Trim());
+        }
+    }
 
     /// <summary>Phrase that ends capture and sends what was captured, e.g. "send it".</summary>
     public string SendPhrase { get; set; } = "send it";

@@ -362,6 +362,24 @@ public sealed class AppServices : IDisposable
     /// possible to leave standby listening and address a different agent just by
     /// naming it.
     /// </summary>
+
+    /// <summary>
+    /// Stops the microphone and returns what was said, without sending it
+    /// anywhere.
+    ///
+    /// Used when the user is recording a PHRASE rather than asking a question:
+    /// the point is to capture exactly what recognition produces from their
+    /// voice, so it can be stored and matched against later.
+    /// </summary>
+    public async Task<string> TranscribeListeningAsync()
+    {
+        var wavPath = Mic.Stop();
+        if (string.IsNullOrEmpty(wavPath)) return "";
+
+        try { return await Stt.TranscribeAsync(wavPath).ConfigureAwait(false); }
+        finally { TryDelete(wavPath); }
+    }
+
     private async Task RouteRequestAsync(string request)
     {
         var route = AgentRouter.Route(request, Settings.Agents.Agents);
@@ -477,7 +495,8 @@ public sealed class AppServices : IDisposable
     /// thing.
     /// </summary>
     public string WakePhrase =>
-        ActiveAgent?.TriggerPhrase is { Length: > 0 } phrase ? phrase : Settings.Standby.WakePhrase;
+        ActiveAgent?.TriggerPhrases.Find(p => !string.IsNullOrWhiteSpace(p))
+        ?? Settings.Standby.WakePhrase;
     public string SendPhrase => Settings.Standby.SendPhrase;
 
     /// <summary>Turns hands-free listening on or off and remembers the choice.</summary>
@@ -545,13 +564,14 @@ public sealed class AppServices : IDisposable
         if (_standby is null) return;
 
         var phrases = Settings.Agents.Agents
-            .Where(agent => !string.IsNullOrWhiteSpace(agent.TriggerPhrase))
-            .Select(agent => (agent.TriggerPhrase, agent.Id))
+            .SelectMany(agent => agent.TriggerPhrases
+                .Where(phrase => !string.IsNullOrWhiteSpace(phrase))
+                .Select(phrase => (Phrase: phrase, Owner: agent.Id)))
             .ToList();
 
         _standby.ExtraWakePhrases = phrases;
         CptLog.Write($"[standby] wake phrases: \"{Settings.Standby.WakePhrase}\""
-            + string.Concat(phrases.Select(p => $", \"{p.TriggerPhrase}\"")));
+            + string.Concat(phrases.Select(p => $", \"{p.Phrase}\"")));
     }
 
     /// <summary>

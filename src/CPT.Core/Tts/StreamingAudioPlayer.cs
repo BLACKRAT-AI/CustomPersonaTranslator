@@ -42,6 +42,7 @@ public sealed class StreamingAudioPlayer : IDisposable
 
     private readonly BufferedWaveProvider _buffer;
     private readonly PlaybackLevelTap _tap;
+    private readonly LoudnessNormaliser _loudness = new();
     private readonly Timer _levelTimer;
     private readonly object _gate = new();
     private bool _disposed;
@@ -80,8 +81,16 @@ public sealed class StreamingAudioPlayer : IDisposable
     public void Write(byte[] pcm)
     {
         if (_disposed) return;
+
+        // Levelled before it is buffered, so every voice arrives at the same
+        // loudness whatever engine produced it.
+        _loudness.Apply(pcm, 0, pcm.Length);
+
         lock (_gate) _buffer.AddSamples(pcm, 0, pcm.Length);
     }
+
+    /// <summary>How much the current voice is being lifted, in dB.</summary>
+    public double GainDb => _loudness.GainDb;
 
     /// <summary>
     /// Reports the level of the audio the sound card has actually reached.
@@ -113,6 +122,7 @@ public sealed class StreamingAudioPlayer : IDisposable
         lock (_gate) _buffer.ClearBuffer();
         _out.Stop();
         _tap.Reset();
+        _loudness.Reset();
         _out.Play();
     }
 

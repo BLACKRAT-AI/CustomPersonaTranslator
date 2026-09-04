@@ -139,7 +139,7 @@ public sealed class StandbyStateMachine
             bestLength = length;
         }
 
-        Consider(_settings.WakePhrase, null);
+        foreach (var phrase in _settings.WakePhrases) Consider(phrase, null);
         foreach (var (phrase, owner) in ExtraWakePhrases) Consider(phrase, owner);
 
         if (bestRemainder is null) return Step(StandbyOutcome.Ignored);

@@ -186,4 +186,31 @@ public class StandbyWakeTests
 
         Assert.Equal(StandbyOutcome.Ignored, machine.Consume(heard).Outcome);
     }
+
+    /// <summary>
+    /// Several phrases for one agent, which is the point of recording them:
+    /// store the typed one AND whatever recognition actually produces.
+    /// </summary>
+    [Fact]
+    public void Any_of_an_agents_phrases_wakes_it()
+    {
+        var machine = Machine(("hey computer", "a1"), ("computer", "a1"), ("okay computer", "a1"));
+
+        Assert.Equal("a1", machine.Consume("okay computer run the tests").WokeBy);
+        machine.Reset();
+        Assert.Equal("a1", machine.Consume("hey computer run the tests").WokeBy);
+    }
+
+    [Fact]
+    public void Several_general_wake_phrases_all_work()
+    {
+        var settings = new StandbySettings { SendPhrase = "send it", CancelPhrase = "never mind" };
+        settings.WakePhrases.Clear();
+        settings.WakePhrases.AddRange(["hey agent", "computer wake up"]);
+        var machine = new StandbyStateMachine(settings);
+
+        Assert.Equal(StandbyOutcome.Woke, machine.Consume("hey agent hello").Outcome);
+        machine.Reset();
+        Assert.Equal(StandbyOutcome.Woke, machine.Consume("computer wake up hello").Outcome);
+    }
 }

@@ -180,17 +180,49 @@
                                             </Border>
                                         </Grid>
 
-                                        <DockPanel Margin="0,10,0,0">
-                                            <TextBlock DockPanel.Dock="Left"
-                                                       Text="Trigger phrase"
-                                                       VerticalAlignment="Center"
-                                                       Margin="0,0,8,0"
-                                                       FontSize="11"
-                                                       Foreground="{StaticResource Muted}"/>
-                                            <TextBox Text="{Binding TriggerPhrase, UpdateSourceTrigger=PropertyChanged}"
-                                                     local:Placeholder.Text="say this before a question, e.g. ask claude"
-                                                     ToolTip="Spoken before a question to send it to this agent"/>
-                                        </DockPanel>
+                                        <!-- Phrases that summon this agent. Several, because what a
+                                             recogniser makes of one voice and one microphone is not
+                                             always what was typed: record the phrase and store what
+                                             was actually heard. -->
+                                        <StackPanel Margin="0,10,0,0">
+                                            <DockPanel LastChildFill="False">
+                                                <TextBlock DockPanel.Dock="Left"
+                                                           Text="TRIGGER PHRASES"
+                                                           VerticalAlignment="Center"
+                                                           FontSize="10" FontWeight="SemiBold"
+                                                           Foreground="{StaticResource Muted}"/>
+                                                <Button DockPanel.Dock="Right"
+                                                        Content="Add"
+                                                        Padding="10,3"
+                                                        Margin="6,0,0,0"
+                                                        Click="OnAddAgentPhrase"
+                                                        ToolTip="Type a phrase instead"/>
+                                                <Button DockPanel.Dock="Right"
+                                                        Style="{StaticResource AccentButton}"
+                                                        Content="Record"
+                                                        Padding="10,3"
+                                                        Margin="8,0,0,0"
+                                                        Click="OnRecordAgentPhrase"
+                                                        ToolTip="Say the phrase. Whatever recognition hears is what gets stored, which is what makes it match."/>
+                                            </DockPanel>
+
+                                            <ItemsControl ItemsSource="{Binding Phrases.Rows}" Margin="0,4,0,0">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate DataType="{x:Type vm:PhraseRow}">
+                                                        <DockPanel Margin="0,3,0,0" LastChildFill="True">
+                                                            <Button DockPanel.Dock="Right"
+                                                                    Content="✕"
+                                                                    Padding="9,2"
+                                                                    Margin="6,0,0,0"
+                                                                    Click="OnRemoveAgentPhrase"
+                                                                    ToolTip="Remove this phrase"/>
+                                                            <TextBox Text="{Binding Text, UpdateSourceTrigger=PropertyChanged}"
+                                                                     local:Placeholder.Text="say this to summon the agent"/>
+                                                        </DockPanel>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
 
                                         <DockPanel Margin="0,7,0,0">
                                             <Button DockPanel.Dock="Right"
@@ -371,13 +403,40 @@
                                        Text="Say the wake phrase, ask, then say the send phrase."/>
 
                             <TextBlock Text="WAKE PHRASE" Style="{StaticResource Caption}"/>
-                            <TextBox x:Name="WakePhrase"/>
+                            <DockPanel LastChildFill="True">
+                                <Button DockPanel.Dock="Right"
+                                        Content="Record"
+                                        Tag="wake"
+                                        Padding="10,3"
+                                        Margin="6,0,0,0"
+                                        Click="OnRecordStandbyPhrase"
+                                        ToolTip="Say it. What recognition hears is what gets stored, which is what makes it match."/>
+                                <TextBox x:Name="WakePhrase" local:Placeholder.Text="several, separated by commas"/>
+                            </DockPanel>
 
                             <TextBlock Text="SEND PHRASE" Style="{StaticResource Caption}"/>
-                            <TextBox x:Name="SendPhrase"/>
+                            <DockPanel LastChildFill="True">
+                                <Button DockPanel.Dock="Right"
+                                        Content="Record"
+                                        Tag="send"
+                                        Padding="10,3"
+                                        Margin="6,0,0,0"
+                                        Click="OnRecordStandbyPhrase"
+                                        ToolTip="Say it. What recognition hears is what gets stored, which is what makes it match."/>
+                                <TextBox x:Name="SendPhrase" local:Placeholder.Text="what to say when the request is finished"/>
+                            </DockPanel>
 
                             <TextBlock Text="CANCEL PHRASE" Style="{StaticResource Caption}"/>
-                            <TextBox x:Name="CancelPhrase"/>
+                            <DockPanel LastChildFill="True">
+                                <Button DockPanel.Dock="Right"
+                                        Content="Record"
+                                        Tag="cancel"
+                                        Padding="10,3"
+                                        Margin="6,0,0,0"
+                                        Click="OnRecordStandbyPhrase"
+                                        ToolTip="Say it. What recognition hears is what gets stored, which is what makes it match."/>
+                                <TextBox x:Name="CancelPhrase" local:Placeholder.Text="what to say to abandon a request"/>
+                            </DockPanel>
 
                             <Grid Margin="0,4,0,0">
                                 <Grid.ColumnDefinitions>

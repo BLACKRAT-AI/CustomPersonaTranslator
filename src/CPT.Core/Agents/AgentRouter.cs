@@ -43,13 +43,16 @@ public static class AgentRouter
 
         foreach (var agent in agents)
         {
-            var phrase = PhraseMatcher.Tokenize(agent.TriggerPhrase);
-            if (phrase.Length == 0 || phrase.Length > words.Length) continue;
-            if (phrase.Length <= bestLength) continue;
-            if (!StartsWith(words, phrase)) continue;
+            foreach (var candidate in agent.TriggerPhrases)
+            {
+                var phrase = PhraseMatcher.Tokenize(candidate);
+                if (phrase.Length == 0 || phrase.Length > words.Length) continue;
+                if (phrase.Length <= bestLength) continue;
+                if (!StartsWith(words, phrase)) continue;
 
-            best = agent;
-            bestLength = phrase.Length;
+                best = agent;
+                bestLength = phrase.Length;
+            }
         }
 
         if (best is null) return new AgentRoute(null, text);
