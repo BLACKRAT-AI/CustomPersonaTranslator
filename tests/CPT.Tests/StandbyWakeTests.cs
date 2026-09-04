@@ -149,4 +149,41 @@ public class StandbyWakeTests
 
         Assert.Equal(StandbyOutcome.Ignored, machine.Consume(heard).Outcome);
     }
+
+    /// <summary>
+    /// Every one of these came out of a real recogniser on this machine, or out
+    /// of the same phrase under measured noise. The distinctive word is heard
+    /// perfectly and the opening syllable is replaced by a rhyme.
+    /// </summary>
+    [Theory]
+    [InlineData("A computer.")]
+    [InlineData("Pay computer.")]
+    [InlineData("Say computer")]
+    [InlineData("They computer")]
+    [InlineData("Hay computer")]
+    [InlineData("Computer")]
+    [InlineData("hey computer")]
+    public void A_rhyme_of_the_opening_word_still_wakes_the_agent(string heard)
+    {
+        var machine = Machine(("hey computer", "a1"));
+
+        Assert.Equal(StandbyOutcome.Woke, machine.Consume(heard).Outcome);
+    }
+
+    /// <summary>
+    /// And a word that does not rhyme is not forgiven, however short. This is
+    /// the line between hearing a quiet user and waking on every sentence that
+    /// mentions the agent.
+    /// </summary>
+    [Theory]
+    [InlineData("the computer is over there")]
+    [InlineData("my computer crashed")]
+    [InlineData("no computer here")]
+    [InlineData("that computer failed")]
+    public void A_word_that_does_not_rhyme_is_not_forgiven(string heard)
+    {
+        var machine = Machine(("hey computer", "a1"));
+
+        Assert.Equal(StandbyOutcome.Ignored, machine.Consume(heard).Outcome);
+    }
 }

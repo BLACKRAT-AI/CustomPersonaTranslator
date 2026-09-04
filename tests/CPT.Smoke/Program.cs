@@ -13,6 +13,78 @@ using CPT.Core.Tts;
 
 var settings = AppSettings.Load();
 
+if (args.Length >= 1 && args[0] == "hearcheck")
+{
+    // Does recognition need a bigger model, or just a hint about what it is
+    // likely to hear? Synthesise a phrase, bury it in noise at a realistic
+    // signal-to-noise ratio, and transcribe it with and without a prompt.
+    //   dotnet run -- hearcheck ["hey computer"] [snr]
+    var say = args.Length >= 2 ? args[1] : "hey computer why did the build fail";
+    var snr = args.Length >= 3
+        ? double.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture)
+        : 6.0;
+
+    var speaker = new PiperTts(settings.PiperPath, settings.PiperModelsDir);
+    var clean = new System.IO.MemoryStream();
+    await foreach (var chunk in speaker.SynthesizeStreamAsync(say, "en_US-amy-medium"))
+        clean.Write(chunk, 0, chunk.Length);
+
+    var pcmBytes = clean.ToArray();
+    var random = new Random(7);
+
+    // Noise at the requested SNR, then the whole thing scaled to a quiet
+    // microphone's level -- the conditions the log showed.
+    double rms = 0;
+    var count = pcmBytes.Length / 2;
+    for (var i = 0; i + 1 < pcmBytes.Length; i += 2)
+    {
+        double s = (short)(pcmBytes[i] | (pcmBytes[i + 1] << 8));
+        rms += s * s;
+    }
+    rms = Math.Sqrt(rms / Math.Max(1, count));
+    var noiseRms = rms / Math.Pow(10, snr / 20);
+
+    var noisy = new byte[pcmBytes.Length];
+    for (var i = 0; i + 1 < pcmBytes.Length; i += 2)
+    {
+        double gauss = (random.NextDouble() + random.NextDouble() + random.NextDouble()
+                      + random.NextDouble() - 2) * 1.7;
+        var mixed = (short)Math.Clamp(
+            (short)(pcmBytes[i] | (pcmBytes[i + 1] << 8)) * 0.02 + gauss * noiseRms * 0.02,
+            short.MinValue, short.MaxValue);
+        noisy[i] = (byte)(mixed & 0xFF);
+        noisy[i + 1] = (byte)((mixed >> 8) & 0xFF);
+    }
+
+    var noisyPath = Path.Combine(Path.GetTempPath(), "cpt_hearcheck.wav");
+    using (var writer = new NAudio.Wave.WaveFileWriter(noisyPath,
+        new NAudio.Wave.WaveFormat(speaker.SampleRate, speaker.BitsPerSample, speaker.Channels)))
+    {
+        writer.Write(noisy, 0, noisy.Length);
+    }
+
+    var hint = string.Join(", ", new[] { settings.Standby.WakePhrase, settings.Standby.SendPhrase }
+        .Concat(settings.Agents.Agents.Select(a => a.TriggerPhrase))
+        .Where(p => !string.IsNullOrWhiteSpace(p)));
+
+    async Task<string> Run(params string[] extra)
+    {
+        var argv = new List<string> { "-m", settings.WhisperModelPath, "-f", noisyPath, "-nt", "-l", "en" };
+        argv.AddRange(extra);
+        var run = await CPT.Core.Cli.ProcessLauncher.RunAsync(settings.WhisperPath, argv,
+            new CPT.Core.Cli.ProcessRunOptions { Timeout = TimeSpan.FromMinutes(2) });
+        return run.StandardOutput.Replace("\n", " ").Replace("\r", "").Trim();
+    }
+
+    Console.WriteLine($"[hear] said       : \"{say}\"   (SNR {snr:0.#} dB, quiet mic)");
+    Console.WriteLine($"[hear] plain      : \"{await Run()}\"");
+    Console.WriteLine($"[hear] prompted   : \"{await Run("--prompt", hint)}\"");
+    Console.WriteLine($"[hear] + beam 8   : \"{await Run("--prompt", hint, "-bs", "8", "-bo", "8")}\"");
+    Console.WriteLine($"[hear] hint was   : \"{hint}\"");
+    try { File.Delete(noisyPath); } catch (IOException) { }
+    return;
+}
+
 if (args.Length >= 1 && args[0] == "phrase")
 {
     // Feeds a transcript straight to the wake rules, so a line copied out of

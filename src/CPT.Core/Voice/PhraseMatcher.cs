@@ -98,6 +98,55 @@ public static class PhraseMatcher
 
 
 
+
+    /// <summary>
+    /// Vowel sounds that recognition confuses, keyed by spelling.
+    ///
+    /// A wake phrase opens with a throwaway syllable and recognition guesses at
+    /// its consonant. Measured on this machine, "hey computer" came back as
+    /// "A computer." and, under noise, as "Pay computer." -- the distinctive
+    /// word perfect every time and the interjection replaced by something that
+    /// rhymes with it. A list of specific words could never keep up with that;
+    /// the rule is the rhyme.
+    /// </summary>
+    private static readonly Dictionary<string, string> VowelClass = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["a"] = "A", ["ay"] = "A", ["ey"] = "A", ["ei"] = "A", ["eigh"] = "A", ["aye"] = "A",
+        ["i"] = "I", ["y"] = "I", ["igh"] = "I", ["ie"] = "I", ["eye"] = "I",
+        ["o"] = "O", ["oh"] = "O", ["ow"] = "O", ["owe"] = "O",
+        ["ello"] = "ELLO", ["allo"] = "ELLO",
+        ["ay,"] = "A",
+    };
+
+    /// <summary>
+    /// True when two short words rhyme closely enough that recognition would
+    /// swap one for the other.
+    ///
+    /// Leading consonants are dropped and the remaining vowel is classified, so
+    /// hey / pay / say / they / a all agree, and "the" does not: its vowel is a
+    /// different sound and "the computer is over there" must never wake
+    /// anything.
+    /// </summary>
+    private static bool SoundsLike(string spoken, string expected)
+    {
+        if (string.Equals(spoken, expected, StringComparison.OrdinalIgnoreCase)) return true;
+
+        // Only the throwaway syllable at the front of a phrase is ever forgiven,
+        // and only a short word can be one.
+        if (spoken.Length > 5 || expected.Length > 5) return false;
+
+        return VowelOf(spoken) is { } a && VowelOf(expected) is { } b && a == b;
+    }
+
+    private static string? VowelOf(string word)
+    {
+        var start = 0;
+        while (start < word.Length && !"aeiouy".Contains(char.ToLowerInvariant(word[start]))) start++;
+        if (start >= word.Length) return null;
+
+        return VowelClass.TryGetValue(word[start..], out var vowel) ? vowel : null;
+    }
+
     /// <summary>
     /// What speech recognition tends to turn a wake phrase's opening word into.
     ///
@@ -137,16 +186,16 @@ public static class PhraseMatcher
 
         var phraseWords = Tokenize(phrase);
         if (phraseWords.Length < 2) return null;              // nothing to be lenient about
-        if (!Confusable.TryGetValue(phraseWords[0], out var alternatives)) return null;
+        // Only an opening word that is a throwaway may be forgiven: a phrase
+        // whose first word carries meaning must be heard in full.
+        if (!Confusable.ContainsKey(phraseWords[0])) return null;
 
         var words = Tokenize(text);
         if (words.Length == 0) return null;
 
         // The opening word may be missing entirely, or misheard as something
         // that sounds like it. Nothing else counts.
-        var skip = Array.Exists(alternatives, a => string.Equals(a, words[0], StringComparison.OrdinalIgnoreCase))
-            ? 1
-            : 0;
+        var skip = SoundsLike(words[0], phraseWords[0]) ? 1 : 0;
 
         var remainder = phraseWords[1..];
         var candidate = words[skip..];
