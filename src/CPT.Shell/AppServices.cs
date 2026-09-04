@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -135,7 +136,7 @@ public sealed class AppServices : IDisposable
         if (Settings.Agents.Active is { } startupAgent) ApplyAgentCli(startupAgent);
         else { ApplyCliOptions(); ApplyRewriteOptions(); }
 
-        WarmCloneIfActivePersonaNeedsIt();
+        StartCloneWatchdog();
         WarmAcknowledgements();
     }
 
@@ -217,6 +218,11 @@ public sealed class AppServices : IDisposable
         try
         {
             OnAgentBusy?.Invoke(true);
+
+            // Warm the voice alongside the CLI's thinking rather than after it.
+            // Costs nothing when it is already warm, and when it is not, the
+            // warm-up happens while the agent is busy instead of afterwards.
+            _ = EnsureCloneReadyAsync(cancellationToken);
 
             // Answer first, work second: a minute of silence reads as being ignored.
             await AcknowledgeAsync(cancellationToken).ConfigureAwait(false);
@@ -537,6 +543,10 @@ public sealed class AppServices : IDisposable
 
     /// <summary>One automatic CLI update per session, so a real failure cannot loop.</summary>
     private bool _cliUpdateAttempted;
+    private readonly SemaphoreSlim _warmLock = new(1, 1);
+    private Timer? _cloneWatchdog;
+    private string? _warmedFor;
+
 
     private StandbyListener? _standby;
 
@@ -682,6 +692,7 @@ public sealed class AppServices : IDisposable
         Settings.ActivePersonaId = persona.Id;
         Settings.Save();
         WarmAcknowledgements();
+        _ = EnsureCloneReadyAsync();          // a new persona means a new reference
         OnActivePersonaChanged?.Invoke(persona);
     }
 
@@ -771,21 +782,83 @@ public sealed class AppServices : IDisposable
         return available ? new ChatterboxTts(Settings.ChatterboxPython, Settings.ChatterboxScript) : null;
     }
 
-    private void WarmCloneIfActivePersonaNeedsIt()
+    /// <summary>
+    /// Keeps the cloned voice ready to speak for as long as the app is running.
+    ///
+    /// Starting the subprocess is not the same as being warm. Measured on this
+    /// machine, with the process already up:
+    ///
+    ///     first synthesis    47.0 s
+    ///     second             43.3 s
+    ///     third               3.6 s
+    ///
+    /// The model loads when the process starts, but the reference clip is
+    /// analysed and the kernels are compiled on the first real synthesis -- so
+    /// "warm" has to mean one throwaway line has actually been spoken, not that
+    /// a process exists. After that it stays at about three and a half seconds
+    /// for as long as the process lives, which is what this keeps true.
+    /// </summary>
+    private async Task EnsureCloneReadyAsync(CancellationToken cancellationToken = default)
     {
         if (CloneTts is not ChatterboxTts chatterbox) return;
-        if (!string.Equals(ActivePersona.Voice.Engine, "chatterbox", StringComparison.OrdinalIgnoreCase)) return;
-        if (string.IsNullOrEmpty(ActivePersona.Voice.VoiceSampleFile)) return;
-        if (!File.Exists(ActivePersona.Voice.VoiceSampleFile)) return;
 
-        _ = Task.Run(async () =>
+        var persona = ActivePersona;
+        if (!string.Equals(persona.Voice.Engine, "chatterbox", StringComparison.OrdinalIgnoreCase)) return;
+
+        var reference = persona.Voice.VoiceSampleFile;
+        if (string.IsNullOrEmpty(reference) || !File.Exists(reference)) return;
+
+        // Keyed on the reference, because a different clip means a different
+        // analysis and the old warm-up counts for nothing.
+        var key = persona.Id + "|" + reference;
+        if (_warmedFor == key && chatterbox.IsWarm) return;
+
+        await _warmLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            try { await chatterbox.WarmAsync().ConfigureAwait(false); }
-            catch (Exception ex) when (ex is InvalidOperationException or IOException)
+            if (_warmedFor == key && chatterbox.IsWarm) return;
+
+            var clock = Stopwatch.StartNew();
+            await chatterbox.WarmAsync(cancellationToken).ConfigureAwait(false);
+
+            // One real line, discarded. This is the part that actually warms it.
+            await foreach (var _ in chatterbox
+                .SynthesizeStreamAsync("Ready.", reference, cancellationToken)
+                .ConfigureAwait(false))
             {
-                OnNotification?.Invoke("Voice clone warmup failed: " + ex.Message);
+                // The audio is not wanted; the work of producing it is.
             }
-        });
+
+            _warmedFor = key;
+            CptLog.Write($"[tts] clone warm for {persona.Name} in {clock.ElapsedMilliseconds} ms");
+        }
+        catch (OperationCanceledException)
+        {
+            // Shutting down, or the persona changed under us.
+        }
+        catch (Exception ex)
+        {
+            _warmedFor = null;
+            CptLog.Write("[tts] clone warm-up failed: " + ex.Message);
+        }
+        finally
+        {
+            _warmLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Checks every couple of minutes that the clone is still up, and brings it
+    /// back if the subprocess has died -- so the next reply is never the one
+    /// that pays the forty-seven seconds.
+    /// </summary>
+    private void StartCloneWatchdog()
+    {
+        _cloneWatchdog = new Timer(
+            _ => _ = EnsureCloneReadyAsync(),
+            null,
+            TimeSpan.FromSeconds(2),
+            TimeSpan.FromMinutes(2));
     }
 
     private void WirePipeline(TranslationPipeline pipeline)
@@ -914,5 +987,7 @@ public sealed class AppServices : IDisposable
         Pipeline.Dispose();
         RewriteCli.Dispose();
         Acknowledgements.Dispose();
+        _cloneWatchdog?.Dispose();
+        _warmLock.Dispose();
     }
 }
