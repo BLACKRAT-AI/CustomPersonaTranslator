@@ -65,6 +65,11 @@ public sealed class AppServices : IDisposable
     /// <summary>The coding CLI CPT drives.</summary>
     public CliOrchestrator Cli { get; }
 
+    /// <summary>Pre-rendered lines the agent says while it starts work.</summary>
+    public AcknowledgementCache Acknowledgements { get; } = new(Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "CustomPersonaTranslator", "acknowledgements"));
+
     public bool CloningAvailable => CloneTts is not null;
 
     // --- events the UI subscribes to --------------------------------------
@@ -131,6 +136,7 @@ public sealed class AppServices : IDisposable
         else { ApplyCliOptions(); ApplyRewriteOptions(); }
 
         WarmCloneIfActivePersonaNeedsIt();
+        WarmAcknowledgements();
     }
 
 
@@ -211,6 +217,10 @@ public sealed class AppServices : IDisposable
         try
         {
             OnAgentBusy?.Invoke(true);
+
+            // Answer first, work second: a minute of silence reads as being ignored.
+            await AcknowledgeAsync(cancellationToken).ConfigureAwait(false);
+
             if (!Settings.Cli.KeepConversationContext) Cli.ResetConversation();
 
             var reply = new StringBuilder();
@@ -284,6 +294,58 @@ public sealed class AppServices : IDisposable
             OnAgentBusy?.Invoke(false);
             _agentTurnLock.Release();
         }
+    }
+
+
+    /// <summary>
+    /// Says something before the work starts.
+    ///
+    /// A coding turn takes a minute, and silence for a minute after being
+    /// spoken to is indistinguishable from not having been heard.
+    ///
+    /// It plays a PRE-RENDERED line. Synthesising one takes 3.6 s on a warm
+    /// clone and 47 s on a cold one, which would delay the very thing the
+    /// acknowledgement exists to prevent; a cached line costs a file read.
+    /// </summary>
+    private async Task AcknowledgeAsync(CancellationToken cancellationToken)
+    {
+        var line = Acknowledgements.Ready(ActivePersona);
+        if (line is null)
+        {
+            // Not built yet. Start it, and say nothing this time rather than
+            // making the user wait to be told they will be kept waiting.
+            WarmAcknowledgements();
+            return;
+        }
+
+        try
+        {
+            await Pipeline.SpeakCachedAsync(line, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            CptLog.Write("[ack] " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Renders this persona's acknowledgements in the background, if they are
+    /// missing. Runs at startup and whenever the persona changes.
+    /// </summary>
+    public void WarmAcknowledgements()
+    {
+        var persona = ActivePersona;
+        var engine = string.Equals(persona.Voice.Engine, "chatterbox", StringComparison.OrdinalIgnoreCase)
+                     && CloneTts is not null
+            ? CloneTts
+            : Tts;
+
+        var voiceRef = engine is ChatterboxTts && !string.IsNullOrEmpty(persona.Voice.VoiceSampleFile)
+            ? persona.Voice.VoiceSampleFile!
+            : persona.Voice.VoiceRef;
+
+        _ = Task.Run(() => Acknowledgements.BuildAsync(persona, engine, voiceRef));
     }
 
     /// <summary>
@@ -619,6 +681,7 @@ public sealed class AppServices : IDisposable
         ActivePersona = persona;
         Settings.ActivePersonaId = persona.Id;
         Settings.Save();
+        WarmAcknowledgements();
         OnActivePersonaChanged?.Invoke(persona);
     }
 
@@ -850,5 +913,6 @@ public sealed class AppServices : IDisposable
         Cli.Dispose();
         Pipeline.Dispose();
         RewriteCli.Dispose();
+        Acknowledgements.Dispose();
     }
 }

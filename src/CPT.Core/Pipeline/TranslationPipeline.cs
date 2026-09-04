@@ -157,6 +157,95 @@ public sealed class TranslationPipeline : IDisposable
     /// question and nothing happened" actually was.
     /// </summary>
 
+
+    /// <summary>
+    /// Speaks text in the persona's voice WITHOUT rewriting it.
+    ///
+    /// For lines the app already knows how to word: an acknowledgement, a
+    /// confirmation. Rewriting them would cost a CLI round trip before a word
+    /// was heard, which is the opposite of what an acknowledgement is for.
+    /// </summary>
+    public async Task SpeakVerbatimAsync(Persona persona, string text, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return;
+
+        SelectEngineForPersona(persona);
+        _speakingAs = persona.Name;
+        _announced = false;
+
+        if (_cloneTts is ChatterboxTts chatterbox)
+            chatterbox.Expressiveness = Math.Clamp(persona.Voice.Expressiveness, 0, 1);
+
+        _player?.Dispose();
+        _player = null;
+
+        try
+        {
+            foreach (var sentence in SplitForSpeech(text))
+            {
+                OnSpokenChunk?.Invoke(sentence);
+                await SpeakAsync(sentence, persona, ct).ConfigureAwait(false);
+            }
+
+            if (_player is not null)
+            {
+                try { await _player.WaitForDrainAsync(ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
+            }
+        }
+        finally
+        {
+            OnDone?.Invoke();
+        }
+    }
+
+
+    /// <summary>
+    /// Plays a pre-rendered acknowledgement, if one is ready.
+    ///
+    /// Returns false when nothing is cached yet, so the caller can decide
+    /// whether to wait for a synthesised line or simply get on with the work.
+    /// </summary>
+    public async Task<bool> SpeakCachedAsync(string wavPath, CancellationToken ct = default)
+    {
+        if (!File.Exists(wavPath)) return false;
+
+        try
+        {
+            using var reader = new NAudio.Wave.WaveFileReader(wavPath);
+            var format = reader.WaveFormat;
+
+            _player?.Dispose();
+            _player = new StreamingAudioPlayer(format.SampleRate, format.Channels, format.BitsPerSample);
+            _player.LevelChanged += level => OnAudioLevel?.Invoke(level);
+
+            _announced = true;
+            OnAppear?.Invoke(_speakingAs);
+
+            var buffer = new byte[format.AverageBytesPerSecond / 4];
+            int read;
+            while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                var chunk = new byte[read];
+                Buffer.BlockCopy(buffer, 0, chunk, 0, read);
+                _player.Write(chunk);
+            }
+
+            await _player.WaitForDrainAsync(ct).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException)
+        {
+            CptLog.Write("[ack] could not play cached line: " + ex.Message);
+            return false;
+        }
+        finally
+        {
+            OnDone?.Invoke();
+        }
+    }
+
     /// <summary>Pushes the current volume to whatever is speaking right now.</summary>
     public void ApplyVolume() => _player?.ApplyVolume();
 

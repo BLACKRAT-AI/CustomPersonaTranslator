@@ -13,6 +13,103 @@ using CPT.Core.Tts;
 
 var settings = AppSettings.Load();
 
+if (args.Length >= 1 && args[0] == "acklat")
+{
+    // How long before the user hears ANYTHING? An acknowledgement that arrives
+    // after the answer is not an acknowledgement.
+    //   dotnet run -- acklat <personaId>
+    var who = args.Length >= 2 ? args[1] : "startrek_computer";
+    var subject = new PersonaStore().Get(who) ?? throw new InvalidOperationException("no persona " + who);
+
+    var piperEngine = new PiperTts(settings.PiperPath, settings.PiperModelsDir);
+    ChatterboxTts? cloneEngine = null;
+    if (ChatterboxTts.IsAvailable(settings.ChatterboxPython, settings.ChatterboxScript))
+        cloneEngine = new ChatterboxTts(settings.ChatterboxPython, settings.ChatterboxScript);
+
+    async Task<long> TimeFirstAudio(ITtsEngine engine, string voiceRef, string what)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        await foreach (var _ in engine.SynthesizeStreamAsync(what, voiceRef)) break;
+        return clock.ElapsedMilliseconds;
+    }
+
+    const string ack = "Working on it. Why did the build fail.";
+    Console.WriteLine($"[ack] line: \"{ack}\"");
+    Console.WriteLine($"[ack] piper            : {await TimeFirstAudio(piperEngine, subject.Voice.VoiceRef, ack)} ms");
+
+    if (cloneEngine is not null)
+    {
+        var reference = subject.Voice.VoiceSampleFile ?? subject.Voice.VoiceRef;
+        Console.WriteLine($"[ack] clone (cold)     : {await TimeFirstAudio(cloneEngine, reference, ack)} ms");
+        Console.WriteLine($"[ack] clone (warm)     : {await TimeFirstAudio(cloneEngine, reference, ack)} ms");
+        Console.WriteLine($"[ack] clone (warm, x2) : {await TimeFirstAudio(cloneEngine, reference, ack)} ms");
+    }
+    return;
+}
+
+if (args.Length >= 1 && args[0] == "models")
+{
+    // Compares every whisper model present on this machine against the same
+    // audio, so choosing one is a measurement rather than a preference.
+    //   dotnet run -- models ["hey computer"] [snr]
+    var line = args.Length >= 2 ? args[1] : "hey computer";
+    var ratio = args.Length >= 3
+        ? double.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture)
+        : 6.0;
+
+    var talker = new PiperTts(settings.PiperPath, settings.PiperModelsDir);
+    var buffer = new System.IO.MemoryStream();
+    await foreach (var chunk in talker.SynthesizeStreamAsync(line, "en_US-amy-medium"))
+        buffer.Write(chunk, 0, chunk.Length);
+    var speech = buffer.ToArray();
+
+    // Same noise and same quiet level as a real microphone here.
+    var rng = new Random(11);
+    double energy = 0;
+    for (var i = 0; i + 1 < speech.Length; i += 2)
+    {
+        double s = (short)(speech[i] | (speech[i + 1] << 8));
+        energy += s * s;
+    }
+    var noise = Math.Sqrt(energy / Math.Max(1, speech.Length / 2)) / Math.Pow(10, ratio / 20);
+
+    var mixed = new byte[speech.Length];
+    for (var i = 0; i + 1 < speech.Length; i += 2)
+    {
+        var gauss = (rng.NextDouble() + rng.NextDouble() + rng.NextDouble() + rng.NextDouble() - 2) * 1.7;
+        var value = (short)Math.Clamp(
+            (short)(speech[i] | (speech[i + 1] << 8)) * 0.02 + gauss * noise * 0.02,
+            short.MinValue, short.MaxValue);
+        mixed[i] = (byte)(value & 0xFF);
+        mixed[i + 1] = (byte)((value >> 8) & 0xFF);
+    }
+
+    var path = Path.Combine(Path.GetTempPath(), "cpt_models.wav");
+    using (var writer = new NAudio.Wave.WaveFileWriter(path,
+        new NAudio.Wave.WaveFormat(talker.SampleRate, talker.BitsPerSample, talker.Channels)))
+    {
+        writer.Write(mixed, 0, mixed.Length);
+    }
+
+    Console.WriteLine($"[models] said \"{line}\" at SNR {ratio:0.#} dB, quiet-microphone level");
+
+    var folder = Path.GetDirectoryName(settings.WhisperModelPath)!;
+    foreach (var model in Directory.GetFiles(folder, "*.bin").OrderBy(f => new FileInfo(f).Length))
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var run = await CPT.Core.Cli.ProcessLauncher.RunAsync(settings.WhisperPath,
+            ["-m", model, "-f", path, "-nt", "-l", "en"],
+            new CPT.Core.Cli.ProcessRunOptions { Timeout = TimeSpan.FromMinutes(3) });
+
+        var size = new FileInfo(model).Length / (1024 * 1024);
+        Console.WriteLine($"[models] {Path.GetFileName(model),-24} {size,5} MB  {clock.ElapsedMilliseconds,6} ms  "
+            + $"\"{run.StandardOutput.Replace("\n", " ").Replace("\r", "").Trim()}\"");
+    }
+
+    try { File.Delete(path); } catch (IOException) { }
+    return;
+}
+
 if (args.Length >= 1 && args[0] == "hearcheck")
 {
     // Does recognition need a bigger model, or just a hint about what it is

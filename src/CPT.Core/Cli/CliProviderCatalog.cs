@@ -88,10 +88,10 @@ public static class CliProviderCatalog
                     ],
                 },
                 Permissions(
-                    Choice("default", "Ask first"),
+                    Choice("default", "Ask before acting"),
                     Choice("acceptEdits", "Auto-accept edits", "--permission-mode", "acceptEdits"),
                     Choice("plan", "Plan only", "--permission-mode", "plan"),
-                    Choice("bypassPermissions", "Full access", "--permission-mode", "bypassPermissions")),
+                    Choice("bypassPermissions", "Never ask (full access)", "--permission-mode", "bypassPermissions")),
             ],
         },
         new CliProvider
@@ -125,9 +125,9 @@ public static class CliProviderCatalog
                     Choice("pro", "Gemini 2.5 Pro", "--model", "gemini-2.5-pro"),
                     Choice("flash", "Gemini 2.5 Flash", "--model", "gemini-2.5-flash")),
                 Permissions(
-                    Choice("default", "Ask first"),
+                    Choice("default", "Ask before acting"),
                     Choice("auto_edit", "Auto-accept edits", "--approval-mode", "auto_edit"),
-                    Choice("yolo", "Full access", "--approval-mode", "yolo")),
+                    Choice("yolo", "Never ask (full access)", "--approval-mode", "yolo")),
             ],
         },
         new CliProvider
@@ -179,10 +179,10 @@ public static class CliProviderCatalog
                     ],
                 },
                 Permissions(
-                    Choice("default", "Ask first"),
+                    Choice("default", "Ask before acting"),
                     Choice("read-only", "Read only", "-s", "read-only"),
                     Choice("workspace-write", "Write in workspace", "-s", "workspace-write"),
-                    Choice("danger-full-access", "Full access", "-s", "danger-full-access")),
+                    Choice("danger-full-access", "Never ask (full access)", "-s", "danger-full-access")),
             ],
         },
         new CliProvider
@@ -216,8 +216,8 @@ public static class CliProviderCatalog
                     Choice("claude-sonnet-4.5", "Claude Sonnet 4.5", "--model", "claude-sonnet-4.5"),
                     Choice("gpt-5", "GPT-5", "--model", "gpt-5")),
                 Permissions(
-                    Choice("default", "Ask first"),
-                    Choice("allow-all", "Full access", "--allow-all-tools")),
+                    Choice("default", "Ask before acting"),
+                    Choice("allow-all", "Never ask (full access)", "--allow-all-tools")),
             ],
         },
     ];
@@ -238,8 +238,8 @@ public static class CliProviderCatalog
     private static CliOption Permissions(params CliOptionChoice[] choices) => new()
     {
         Id = "permissions",
-        Label = "What it may do on its own",
-        Hint = "Full access lets it edit files and run commands without asking.",
+        Label = "Approvals",
+        Hint = "“Never ask” runs edits and commands without stopping for permission.",
         DefaultChoiceId = "default",
         Choices = choices,
     };

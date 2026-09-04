@@ -34,6 +34,9 @@ internal sealed class PrismaticBorder : FrameworkElement
     /// </summary>
     private const int Segments = 420;
 
+    /// <summary>Steps in the halo. More, fainter steps read as a glow; few, strong ones as rings.</summary>
+    private const int GlowSteps = 9;
+
     /// <summary>Frame cap. A slowly spinning blurred ring does not need 60fps.</summary>
     private static readonly TimeSpan FrameInterval = TimeSpan.FromSeconds(1.0 / 18);
 
@@ -49,7 +52,10 @@ internal sealed class PrismaticBorder : FrameworkElement
     public PrismaticBorder()
     {
         IsHitTestVisible = false;
-        Effect = _bloom;
+
+        // A single soft blur over the whole element, which spreads the strokes
+        // below into a halo while each keeps its own colour.
+        Effect = new BlurEffect { Radius = 2.5, KernelType = KernelType.Gaussian };
         Loaded += (_, _) => Kick();
         Unloaded += (_, _) => Stop();
     }
@@ -122,35 +128,43 @@ internal sealed class PrismaticBorder : FrameworkElement
         }
     }
 
-    protected override void OnRender(DrawingContext dc)
+    protected override void OnRender(DrawingContext drawingContext)
     {
         var w = ActualWidth;
         var h = ActualHeight;
         if (w < 8 || h < 8) return;
 
         var e = _energy;
-
-        // The bloom is the element's own shadow: one colour, half a turn round
-        // the spectrum from the ring, exactly as SYNTAX picks its shadowColor.
-        _bloom.Opacity = e < 0.01 ? 0 : Math.Min(1, (0.12 + e * 0.30) * e * 2.8);
-        _bloom.BlurRadius = 4 + e * 16;
-        _bloom.Color = PersonaPalette.At(_colour, (_phase + 0.5) % 1, 0.7, 0.72);
-
         var geometry = Perimeter(w, h);
 
         // The calm grey base is ALWAYS drawn, so the colour above it can fade to
         // nothing without the outline disappearing.
         var grey = new Pen(new SolidColorBrush(Color.FromArgb(0x80, 0x3B, 0x3D, 0x44)), 1.6);
         grey.Freeze();
-        dc.DrawGeometry(null, grey, geometry);
+        drawingContext.DrawGeometry(null, grey, geometry);
         if (e < 0.01) return;
 
         // SYNTAX's own saturation and lightness ramp, unchanged.
         var saturation = 0.12 + e * 0.76;
         var lightness = 0.46 + e * 0.30;
 
-        DrawSweep(dc, w, h, saturation, lightness, width: 2 + e * 3, alpha: (0.12 + e * 0.30) * e);
-        DrawSweep(dc, w, h, saturation, lightness, width: 1.4 + e * 1.6, alpha: (0.7 + e * 0.3) * e);
+        // The glow is built from the ring itself: wide, faint strokes UNDER the
+        // core, each segment carrying its own colour. It used to be a drop
+        // shadow on the whole element, which has exactly one colour -- so a
+        // spectrum ring cast a single-hue halo that did not follow it.
+        // Many thin steps rather than three thick ones: each is nearly
+        // invisible on its own and together they fall off smoothly, where three
+        // stacked into visible concentric bands.
+        for (var step = 0; step < GlowSteps; step++)
+        {
+            var distance = 1 - (double)step / GlowSteps;          // 1 at the outside
+            DrawSweep(drawingContext, w, h, saturation, lightness,
+                width: (1.6 + distance * 16) * (0.5 + e * 0.5),
+                alpha: 0.10 * e * (1 - distance) * (1 - distance));
+        }
+
+        DrawSweep(drawingContext, w, h, saturation, lightness,
+            width: 1.4 + e * 1.6, alpha: (0.7 + e * 0.3) * e);
     }
 
     /// <summary>
