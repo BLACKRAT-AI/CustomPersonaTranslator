@@ -161,7 +161,8 @@ public static class CliProviderCatalog
             Options =
             [
                 Model(
-                    Choice("default", "Default"),
+                    Choice("default", "Default (from codex config)"),
+                    Choice("gpt-6-astra", "GPT-6 Astra", "-m", "gpt-6-astra"),
                     Choice("gpt-5-codex", "GPT-5 Codex", "-m", "gpt-5-codex"),
                     Choice("gpt-5", "GPT-5", "-m", "gpt-5")),
                 new CliOption
@@ -176,6 +177,7 @@ public static class CliProviderCatalog
                         Choice("low", "Low", "-c", "model_reasoning_effort=\"low\""),
                         Choice("medium", "Medium", "-c", "model_reasoning_effort=\"medium\""),
                         Choice("high", "High", "-c", "model_reasoning_effort=\"high\""),
+                        Choice("xhigh", "Extra high", "-c", "model_reasoning_effort=\"xhigh\""),
                     ],
                 },
                 Permissions(
@@ -183,6 +185,31 @@ public static class CliProviderCatalog
                     Choice("read-only", "Read only", "-s", "read-only"),
                     Choice("workspace-write", "Write in workspace", "-s", "workspace-write"),
                     Choice("danger-full-access", "Never ask (full access)", "-s", "danger-full-access")),
+                new CliOption
+                {
+                    Id = "extensions",
+                    Label = "MCP extensions",
+                    Hint = "Your codex MCP servers. Off avoids waiting on any that are unreachable.",
+
+                    // Off by default. Codex connects to every MCP server in the
+                    // user's config on each invocation and retries the ones it
+                    // cannot reach; on this machine two of three were dead -- a
+                    // Unity endpoint that was not running and a web endpoint
+                    // answering 404 -- so each turn carried three transport
+                    // failures it could do nothing with.
+                    //
+                    // It has to be --ignore-user-config, not an override of the
+                    // servers table: "-c mcp_servers={}" looks like it should
+                    // work and does nothing at all. Measured by counting the
+                    // transport errors, it was three with the override and
+                    // three without; with this flag it is zero.
+                    DefaultChoiceId = "off",
+                    Choices =
+                    [
+                        Choice("off", "Off (ignore my codex config)", "--ignore-user-config"),
+                        Choice("on", "Use my codex MCP servers"),
+                    ],
+                },
             ],
         },
         new CliProvider

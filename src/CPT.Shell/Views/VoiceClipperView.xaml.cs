@@ -60,10 +60,17 @@ public sealed partial class VoiceClipperView : SettingsPage, IDisposable
     /// </summary>
     private bool _suppressSessionSave;
 
-    public VoiceClipperView(AppServices services)
+    /// <summary>
+    /// Whose voice is being picked. The saved link and marks belong to this
+    /// persona, so editing one does not offer you another one's video.
+    /// </summary>
+    private readonly string? _personaId;
+
+    public VoiceClipperView(AppServices services, string? personaId = null)
     {
         InitializeComponent();
         _services = services ?? throw new ArgumentNullException(nameof(services));
+        _personaId = personaId;
         _youtube = new YoutubeAudio(services.Settings.YtDlpPath, services.Settings.FfmpegPath);
 
         ClipList.ItemsSource = _clips;
@@ -89,7 +96,7 @@ public sealed partial class VoiceClipperView : SettingsPage, IDisposable
     /// </summary>
     private async Task RestoreLastSessionAsync()
     {
-        if (VoiceClipSession.Load() is not { } session) return;
+        if (VoiceClipSession.Load(_personaId) is not { } session) return;
 
         UrlBox.Text = session.Url;
         var restored = session.ToClips();
@@ -105,7 +112,7 @@ public sealed partial class VoiceClipperView : SettingsPage, IDisposable
     {
         if (_suppressSessionSave) return;
         if (_video is null && UrlBox.Text.Trim().Length == 0) return;
-        VoiceClipSession.From(UrlBox.Text.Trim(), _video?.Title ?? "", _clips).Save();
+        VoiceClipSession.From(UrlBox.Text.Trim(), _video?.Title ?? "", _clips).Save(_personaId);
     }
 
     /// <summary>Path of the WAV built from the marked clips, once the user accepts.</summary>

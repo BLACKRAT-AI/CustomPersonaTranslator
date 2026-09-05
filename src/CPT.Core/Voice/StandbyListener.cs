@@ -41,14 +41,56 @@ public sealed class StandbyListener : IAsyncDisposable
     /// <summary>
     /// How long the user has to start speaking after being woken.
     ///
-    /// Longer than the pause that ENDS a request: waking is a moment to draw
-    /// breath, and recognition itself takes a couple of seconds, so the clock
-    /// has already been running before the wake is even known about.
+    /// Much longer than the pause that ENDS a request: waking is a moment to
+    /// draw breath, and the clock is measured from the audio, so recognition has
+    /// already spent a second or two of it before the wake is even known about.
     /// </summary>
-    private const int StartSpeakingSeconds = 8;
+    private const int StartSpeakingSeconds = 10;
+
+    /// <summary>
+    /// How much speech must pile up before guessing at the wake phrase, and how
+    /// often to guess again while the person keeps talking.
+    ///
+    /// Waiting for the utterance to END costs the detector's 700 ms of trailing
+    /// silence before recognition even starts. Since the wake phrase sits at the
+    /// front, there is no reason to wait: once about two-thirds of a second of
+    /// speech exists, it can already contain "hey computer".
+    /// </summary>
+    private const int SpeculateAfterMilliseconds = 450;
+    private const int SpeculateEveryMilliseconds = 200;
+
+    /// <summary>
+    /// How much of the recent past each guess looks at, in frames of 50 ms.
+    ///
+    /// A TRAILING window, not the whole utterance. Two things go wrong without
+    /// it, and they pull in opposite directions. Guessing at the whole utterance
+    /// means the recogniser is handed a steadily longer clip for as long as
+    /// somebody keeps talking -- in a room with a television, forever. Capping
+    /// it by total length instead means giving up on long utterances entirely,
+    /// so a wake phrase spoken over the top of the television is never looked
+    /// for at all.
+    ///
+    /// A window does both jobs: every guess costs the same, and the agent's name
+    /// is always inside it, because it was just said.
+    /// </summary>
+    private const int SpeculateWindowFrames = 50;
+
+    /// <summary>
+    /// How much unheard audio may pile up while asleep. Two is enough to cover
+    /// a phrase that arrives while one is being screened, and short enough that
+    /// waiting for the queue can never cost more than about a second.
+    /// </summary>
+    private const int MaxQueuedWhileSleeping = 2;
 
     private readonly ContinuousMicCapture _microphone = new();
     private readonly ITranscriber _transcriber;
+
+    /// <summary>
+    /// The small, fast recogniser used ONLY to notice the wake phrase early.
+    /// Null when no suitable model is installed, in which case waking simply
+    /// happens the slow way.
+    /// </summary>
+    private readonly ITranscriber? _wakeSpotter;
     private readonly StandbySettings _settings;
     private readonly StandbyStateMachine _machine;
     private readonly VoiceActivityDetector _detector;
@@ -72,8 +114,34 @@ public sealed class StandbyListener : IAsyncDisposable
     private Timer? _idleTimer;
     private bool _disposed;
 
-    /// <summary>Raised when the wake phrase is heard.</summary>
-    public event Action? Woke;
+    /// <summary>One speculative pass at a time; 1 while one is running.</summary>
+    private int _speculating;
+
+    /// <summary>How much of the current utterance is history rather than speech.</summary>
+    private int _prerollFrames;
+
+    /// <summary>Utterances waiting to be recognised.</summary>
+    private int _queued;
+    private DateTime _lastSpeculationAt = DateTime.MinValue;
+
+    /// <summary>
+    /// Set once the wake has been announced, so the early guess and the
+    /// authoritative transcript that follows it do not chime twice.
+    /// </summary>
+    private bool _wakeAnnounced;
+
+
+
+    /// <summary>
+    /// Raised when a wake phrase is heard, with the id of the agent whose
+    /// phrase it was (null for the general one).
+    ///
+    /// The id matters at THIS moment, not when a request finally arrives.
+    /// Saying "hey jarvis" is how a person calls Jarvis up; it used to change
+    /// nothing until a request was completed, so calling an agent by name and
+    /// then pausing summoned nobody at all.
+    /// </summary>
+    public event Action<string?>? Woke;
 
     /// <summary>Raised as the request grows, with everything captured so far.</summary>
     public event Action<string>? Captured;
@@ -91,9 +159,11 @@ public sealed class StandbyListener : IAsyncDisposable
     /// <summary>Raised when something went wrong that the user should see.</summary>
     public event Action<string>? Failed;
 
-    public StandbyListener(ITranscriber transcriber, StandbySettings settings)
+    public StandbyListener(
+        ITranscriber transcriber, StandbySettings settings, ITranscriber? wakeSpotter = null)
     {
         _transcriber = transcriber ?? throw new ArgumentNullException(nameof(transcriber));
+        _wakeSpotter = wakeSpotter;
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _machine = new StandbyStateMachine(settings);
         _detector = new VoiceActivityDetector(settings.SilenceThreshold, FrameMilliseconds);
@@ -126,6 +196,7 @@ public sealed class StandbyListener : IAsyncDisposable
 
         _machine.Reset();
         _detector.Reset();
+        _wakeAnnounced = false;
         _lastSpeechAt = DateTime.UtcNow;
 
         _worker ??= Task.Run(() => ProcessTranscriptionsAsync(_stop.Token));
@@ -166,6 +237,7 @@ public sealed class StandbyListener : IAsyncDisposable
     {
         _machine.Reset();
         _detector.Reset();
+        _wakeAnnounced = false;
         _lastSpeechAt = DateTime.UtcNow;
         _worker ??= Task.Run(() => ProcessTranscriptionsAsync(_stop.Token));
 
@@ -185,6 +257,7 @@ public sealed class StandbyListener : IAsyncDisposable
         _microphone.Stop();
         _machine.Reset();
         _detector.Reset();
+        _wakeAnnounced = false;
 
         lock (_audioGate)
         {
@@ -203,6 +276,8 @@ public sealed class StandbyListener : IAsyncDisposable
 
         var activity = _detector.Process(frame.Level);
         string? completedUtterance = null;
+        string? speculateOn = null;
+        var purgeBacklog = false;
 
         lock (_audioGate)
         {
@@ -216,13 +291,23 @@ public sealed class StandbyListener : IAsyncDisposable
                     break;
 
                 case VoiceActivity.Speech:
-                    if (_utterance.Count == 0 && _preRoll.Count > 0)
+                    if (_utterance.Count == 0)
                     {
+                        _prerollFrames = _preRoll.Count;
                         _utterance.AddRange(_preRoll);
                         _preRoll.Clear();
+
+                        // Somebody has started talking. If that turns out to be
+                        // the agent's name, the recogniser should be free to
+                        // hear it -- not still working through whatever the
+                        // television said ten seconds ago. Clearing now rather
+                        // than when this utterance ENDS is the difference,
+                        // because by then the queue is already being worked.
+                        purgeBacklog = _machine.State == StandbyState.Sleeping;
                     }
                     _utterance.Add(frame.Pcm);
                     _lastSpeechAt = DateTime.UtcNow;
+                    speculateOn = SnapshotForSpeculation();
                     break;
 
                 case VoiceActivity.UtteranceEnded:
@@ -234,20 +319,146 @@ public sealed class StandbyListener : IAsyncDisposable
             }
         }
 
-        if (completedUtterance is not null)
-            _pendingTranscriptions.Writer.TryWrite(completedUtterance);
+        if (purgeBacklog) DropBacklog(0);
+        if (completedUtterance is not null) Enqueue(completedUtterance);
+
+        if (speculateOn is not null) _ = AnswerToNameAsync(speculateOn);
     }
 
-    /// <summary>Writes the buffered utterance to a temp WAV. Caller holds the audio lock.</summary>
-    private string? WriteUtteranceToTemporaryFile()
+    /// <summary>
+    /// A copy of the utterance so far, when it is worth guessing at. Null the
+    /// rest of the time. Caller holds the audio lock.
+    ///
+    /// Guessing only matters while asleep: once awake, the words are the request
+    /// and the accurate model is the one that should hear them.
+    /// </summary>
+    private string? SnapshotForSpeculation()
     {
-        if (_utterance.Count == 0) return null;
+        if (_wakeSpotter is null) return null;
+        if (_machine.State != StandbyState.Sleeping) return null;
+        if (Volatile.Read(ref _speculating) != 0) return null;
+
+        // Speech, not buffer. The utterance opens with a second of pre-roll
+        // history, and counting that as speech meant the very first frame
+        // already looked like a full phrase: the first guess fired immediately,
+        // on a second of silence, and took the slot with it.
+        var spoken = (_utterance.Count - _prerollFrames) * FrameMilliseconds;
+        if (spoken < SpeculateAfterMilliseconds) return null;
+
+        var now = DateTime.UtcNow;
+        if ((now - _lastSpeculationAt).TotalMilliseconds < SpeculateEveryMilliseconds) return null;
+
+        _lastSpeculationAt = now;
+        return WriteToTemporaryFile(TrailingFrames(SpeculateWindowFrames));
+    }
+
+    /// <summary>
+    /// Answers to the agent's name while the sentence is still being spoken.
+    ///
+    /// This ONLY chimes and lights the indicator. It deliberately changes no
+    /// state and keeps no text, because half a sentence is not a safe thing to
+    /// decide from: an earlier version consumed the partial transcript, and
+    /// "hey computer, why did the build fail" woke on the first 600 ms and then
+    /// replayed the whole utterance as the request, wake phrase included.
+    ///
+    /// So the fast model gets the one job it cannot get wrong in a costly way --
+    /// saying "I heard you" -- and the utterance is still decided properly once
+    /// it has actually finished.
+    /// </summary>
+    private async Task AnswerToNameAsync(string wavPath)
+    {
+        if (Interlocked.CompareExchange(ref _speculating, 1, 0) != 0)
+        {
+            TryDelete(wavPath);
+            return;
+        }
+
+        try
+        {
+            var started = DateTime.UtcNow;
+            var transcript = await _wakeSpotter!
+                .TranscribeAsync(wavPath, _stop.Token).ConfigureAwait(false);
+
+            if (string.IsNullOrWhiteSpace(transcript)) return;
+            if (_machine.State != StandbyState.Sleeping) return;
+            if (_machine.MatchWake(transcript) is not { } heard) return;
+
+            var elapsed = (DateTime.UtcNow - started).TotalMilliseconds;
+            CptLog.Write($"[standby] name heard in {elapsed:0} ms on: {transcript}");
+            AnnounceWake(heard.Owner);
+        }
+        catch (OperationCanceledException)
+        {
+            // Standby stopped mid-guess.
+        }
+        catch (Exception ex)
+        {
+            CptLog.Write("[standby] fast pass failed: " + ex.Message);
+        }
+        finally
+        {
+            TryDelete(wavPath);
+            Volatile.Write(ref _speculating, 0);
+        }
+    }
+
+    /// <summary>
+    /// Queues an utterance, dropping the oldest if a backlog is building.
+    ///
+    /// Recognition is serial, so a queue is a delay: whatever is waiting has to
+    /// finish before the phrase that was actually meant for the agent is even
+    /// looked at. In a room with a television that queue never empties, and the
+    /// wake phrase inherited every second of it.
+    ///
+    /// Old audio is the right thing to throw away. While asleep the only
+    /// question is whether the agent was just addressed, and the answer to that
+    /// is in the NEWEST audio; a discarded utterance from four seconds ago was
+    /// somebody else talking. While awake nothing is dropped, because then every
+    /// utterance is part of what the user is dictating.
+    /// </summary>
+    private void Enqueue(string wavPath)
+    {
+        // Depth is counted here rather than asked of the channel: an unbounded
+        // channel does not report its own Count.
+        if (_machine.State == StandbyState.Sleeping) DropBacklog(MaxQueuedWhileSleeping);
+
+        if (_pendingTranscriptions.Writer.TryWrite(wavPath)) Interlocked.Increment(ref _queued);
+    }
+
+    /// <summary>
+    /// Throws away queued audio until at most <paramref name="keep"/> remains.
+    /// Depth is counted here because an unbounded channel does not report it.
+    /// </summary>
+    private void DropBacklog(int keep)
+    {
+        while (Volatile.Read(ref _queued) > keep
+               && _pendingTranscriptions.Reader.TryRead(out var stale))
+        {
+            Interlocked.Decrement(ref _queued);
+            CptLog.Write("[standby] dropped backlogged audio to keep the wake phrase prompt");
+            TryDelete(stale);
+        }
+    }
+
+    /// <summary>The last few frames of the utterance. Caller holds the audio lock.</summary>
+    private List<byte[]> TrailingFrames(int count) =>
+        _utterance.Count <= count
+            ? _utterance
+            : _utterance.GetRange(_utterance.Count - count, count);
+
+    /// <summary>Writes the buffered utterance to a temp WAV. Caller holds the audio lock.</summary>
+    private string? WriteUtteranceToTemporaryFile() => WriteToTemporaryFile(_utterance);
+
+    /// <summary>Writes frames to a temp WAV. Caller holds the audio lock.</summary>
+    private static string? WriteToTemporaryFile(List<byte[]> frames)
+    {
+        if (frames.Count == 0) return null;
 
         var path = Path.Combine(Path.GetTempPath(), $"cpt_standby_{Guid.NewGuid():N}.wav");
         try
         {
             using var writer = new WaveFileWriter(path, ContinuousMicCapture.Format);
-            foreach (var frame in _utterance) writer.Write(frame, 0, frame.Length);
+            foreach (var frame in frames) writer.Write(frame, 0, frame.Length);
             return path;
         }
         catch (IOException ex)
@@ -267,6 +478,22 @@ public sealed class StandbyListener : IAsyncDisposable
             await foreach (var wavPath in _pendingTranscriptions.Reader
                                .ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {
+                Interlocked.Decrement(ref _queued);
+
+                // An utterance that is nothing but the agent's name needs no
+                // accurate transcription: there are no words in it to get right,
+                // and the large model would spend two and a half seconds
+                // confirming what the small one already read correctly.
+                var decided = await ScreenWhileSleepingAsync(wavPath, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (decided != Screened.NeedsAccurateTranscription)
+                {
+                    TryDelete(wavPath);
+                    if (decided == Screened.NotForUs) _wakeAnnounced = false;
+                    continue;
+                }
+
                 string transcript;
                 try
                 {
@@ -285,6 +512,11 @@ public sealed class StandbyListener : IAsyncDisposable
                 }
 
                 if (!string.IsNullOrWhiteSpace(transcript)) Apply(transcript);
+
+                // A guess that chimed and then turned out to be somebody saying
+                // something else must not leave the indicator lit, or swallow
+                // the chime for the summons that really comes.
+                if (_machine.State == StandbyState.Sleeping) _wakeAnnounced = false;
             }
         }
         catch (OperationCanceledException)
@@ -317,14 +549,103 @@ public sealed class StandbyListener : IAsyncDisposable
 
     private void Apply(string transcript)
     {
-        // The silence clock measures time since something was HEARD, not since the
-        // audio arrived: recognition lags by a couple of seconds, and using the
-        // audio's timestamp meant a wake phrase spoken alone was already
-        // "silent for 2.4s" the instant it woke, and gave up immediately.
-        _lastSpeechAt = DateTime.UtcNow;
-
+        // Note what is NOT here: the silence clock is not restarted.
+        //
+        // It used to be, because recognition lags by seconds and a wake phrase
+        // spoken alone was already "silent for 2.4s" the instant it woke, and
+        // gave up immediately. But paying that lag twice -- once waiting for the
+        // transcript, then the full pause again on top -- is what made finishing
+        // a request take five seconds after the user had stopped talking.
+        //
+        // The clock is audio-driven instead, and the two timeouts differ enough
+        // to absorb the lag: a pause that ENDS a request is measured from the
+        // end of the audio, where the pause really happened, and the window to
+        // START speaking is long enough that recognition can eat some of it.
         CptLog.Write($"[standby] heard ({_machine.State}): {transcript}");
         Publish(_machine.Consume(transcript));
+    }
+
+    /// <summary>
+    /// Handles a finished utterance that contains the wake phrase and nothing
+    /// else, using only the fast model. True when it did.
+    ///
+    /// This is the common case by far -- someone says the agent's name and waits
+    /// -- and it is the case where the accurate model has nothing to offer,
+    /// because there are no request words in the audio at all. Anything with
+    /// words after the name is left alone and heard properly.
+    /// </summary>
+    private async Task<Screened> ScreenWhileSleepingAsync(
+        string wavPath, CancellationToken cancellationToken)
+    {
+        if (_wakeSpotter is null) return Screened.NeedsAccurateTranscription;
+        if (_machine.State != StandbyState.Sleeping) return Screened.NeedsAccurateTranscription;
+
+        string transcript;
+        try
+        {
+            transcript = await _wakeSpotter.TranscribeAsync(wavPath, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            CptLog.Write("[standby] fast pass failed: " + ex.Message);
+            return Screened.NeedsAccurateTranscription;
+        }
+
+        // Not addressed to us. This is the overwhelming majority of what an
+        // always-on microphone hears -- a television, a conversation across the
+        // room -- and it used to be handed to the large model anyway. Measured
+        // in one three-minute stretch: twenty background utterances, each
+        // costing 2.6 s of recognition, on a machine that was at that moment
+        // also running the agent's turn and warming a voice clone. Nothing was
+        // gained by any of it; while asleep the only question is whether the
+        // agent's name was said, and the small model has already answered it.
+        if (_machine.MatchWake(transcript) is not { } match)
+        {
+            CptLog.Write("[standby] not for us: " + transcript.Trim());
+            return Screened.NotForUs;
+        }
+
+        // Named, with nothing after it: the small model heard everything there
+        // was to hear, so the large one has nothing to add.
+        if (match.Remainder.Length == 0)
+        {
+            CptLog.Write("[standby] name only, heard fast: " + transcript);
+            Apply(transcript);
+            return Screened.Handled;
+        }
+
+        // Named, and then asked something. Those words are the request and
+        // deserve the better model.
+        return Screened.NeedsAccurateTranscription;
+    }
+
+    /// <summary>What the fast screen decided about one utterance.</summary>
+    private enum Screened
+    {
+        /// <summary>Nobody addressed the agent; drop it.</summary>
+        NotForUs,
+
+        /// <summary>The wake phrase, and only that. Already applied.</summary>
+        Handled,
+
+        /// <summary>Worth the large model: a request, or no screen available.</summary>
+        NeedsAccurateTranscription,
+    }
+
+    /// <summary>
+    /// Says "I heard my name", once per waking.
+    ///
+    /// Both the fast guess and the accurate transcript can arrive at the same
+    /// wake, and the user should hear one chime for one summons.
+    /// </summary>
+    private void AnnounceWake(string? owner)
+    {
+        if (_wakeAnnounced) return;
+
+        _wakeAnnounced = true;
+        _wokeAt = DateTime.UtcNow;
+        Woke?.Invoke(owner);
     }
 
     private void Publish(StandbyStep step)
@@ -332,8 +653,7 @@ public sealed class StandbyListener : IAsyncDisposable
         switch (step.Outcome)
         {
             case StandbyOutcome.Woke:
-                _wokeAt = DateTime.UtcNow;
-                Woke?.Invoke();
+                AnnounceWake(step.WokeBy);
                 if (step.Captured.Length > 0) Captured?.Invoke(step.Captured);
                 break;
 
@@ -343,11 +663,13 @@ public sealed class StandbyListener : IAsyncDisposable
 
             case StandbyOutcome.Send:
                 _wokeAt = DateTime.MinValue;
+                _wakeAnnounced = false;
                 if (step.Request is { Length: > 0 } request) RequestReady?.Invoke(request, step.WokeBy);
                 break;
 
             case StandbyOutcome.Cancelled:
                 _wokeAt = DateTime.MinValue;
+                _wakeAnnounced = false;
                 Cancelled?.Invoke();
                 break;
 
@@ -382,7 +704,20 @@ public sealed class StandbyListener : IAsyncDisposable
             ? StartSpeakingSeconds
             : _settings.SilenceTimeoutSeconds;
 
-        if (allowed <= 0 || (now - _lastSpeechAt).TotalSeconds < allowed) return;
+        if (allowed <= 0) return;
+
+        // The pause is measured from the later of the audio ending and the wake
+        // being ANNOUNCED, because those can be seconds apart.
+        //
+        // Recognition of the waking utterance takes a couple of seconds, so when
+        // somebody says "hey jarvis, how is the build" in one breath, the audio
+        // has been over for longer than the whole silence timeout by the time
+        // the wake is known about. Measured from the audio alone the request was
+        // sent 99 ms after waking -- before the chime had finished, and long
+        // before the user could add the words the recogniser had mangled. The
+        // pause only means anything once the user has been told it is listening.
+        var since = _lastSpeechAt > _wokeAt ? _lastSpeechAt : _wokeAt;
+        if ((now - since).TotalSeconds < allowed) return;
 
         CptLog.Write(_machine.Captured.Length == 0
             ? "[standby] nothing was said after waking; going back to sleep"

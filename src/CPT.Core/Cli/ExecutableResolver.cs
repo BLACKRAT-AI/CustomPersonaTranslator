@@ -87,8 +87,37 @@ public static class ExecutableResolver
         }
     }
 
+    /// <summary>
+    /// Where CPT keeps CLIs it installed for itself, one folder per tool.
+    ///
+    /// Searched BEFORE the PATH, so the app's copy wins over a global one.
+    /// This exists because the two cannot always be the same copy: npm cannot
+    /// replace a binary that is running, and a long-lived session of the user's
+    /// own holds it open for hours. The observed result was an install stuck
+    /// half-applied -- package metadata at 0.153.4, the actual binary still
+    /// 0.153.3 -- and every turn failing with "requires a newer version of
+    /// Codex" that no amount of updating could fix.
+    ///
+    /// A private copy means the app can keep itself current without waiting for
+    /// the user to close their work, and without touching it.
+    /// </summary>
+    public static string PrivateToolsFolder { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "CustomPersonaTranslator", "tools");
+
     private static IEnumerable<string> RawSearchDirectories()
     {
+        // The app's own copies first.
+        if (Directory.Exists(PrivateToolsFolder))
+        {
+            foreach (var tool in Directory.EnumerateDirectories(PrivateToolsFolder))
+            {
+                yield return tool;
+                var bin = Path.Combine(tool, "bin");
+                if (Directory.Exists(bin)) yield return bin;
+            }
+        }
+
         var path = Environment.GetEnvironmentVariable("PATH") ?? "";
         foreach (var dir in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
             yield return dir;

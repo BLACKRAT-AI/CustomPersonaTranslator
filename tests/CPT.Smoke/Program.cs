@@ -9,9 +9,531 @@ using CPT.Core.Models;
 using CPT.Core.Personas;
 using CPT.Core.Pipeline;
 using CPT.Core.Settings;
+using CPT.Core.Agents;
 using CPT.Core.Tts;
 
 var settings = AppSettings.Load();
+
+if (args.Length >= 1 && args[0] == "wakespeed")
+{
+    // Measures the delay between saying an agent's name and the app answering
+    // to it, by feeding a recording through the listener at the pace a
+    // microphone would deliver it. The number that matters is the wall clock
+    // from the first frame of speech to the Woke event, because that is exactly
+    // the silence the user sits through wondering whether it heard them.
+    var clip = args.Length >= 2 ? args[1] : null;
+    if (clip is null || !File.Exists(clip))
+    {
+        Console.WriteLine("usage: wakespeed <wav with the wake phrase> [--slow]");
+        return;
+    }
+
+    var slow = args.Contains("--slow");
+
+    var accurate = new CPT.Core.Stt.WhisperCpp(
+        settings.WhisperPath,
+        string.IsNullOrWhiteSpace(settings.WhisperModelPath) ? null : settings.WhisperModelPath);
+
+    var spotter = slow
+        ? null
+        : CPT.Core.Stt.WhisperCpp.ForWakeSpotting(
+            settings.WhisperPath,
+            string.IsNullOrWhiteSpace(settings.WhisperModelPath) ? null : settings.WhisperModelPath);
+
+    Console.WriteLine($"[wakespeed] request model = {Path.GetFileName(accurate.ModelPath)}");
+    Console.WriteLine($"[wakespeed] wake model    = "
+        + (spotter is null ? "(none — same as request model)" : Path.GetFileName(spotter.ModelPath)));
+
+    await using var listener = new CPT.Core.Voice.StandbyListener(accurate, settings.Standby, spotter);
+    listener.ExtraWakePhrases =
+    [
+        .. settings.Agents.Agents.SelectMany(a =>
+            a.TriggerPhrases.Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => (t, a.Id))),
+    ];
+
+    Console.WriteLine("[wakespeed] phrases: " + string.Join(", ",
+        settings.Standby.WakePhrases.Concat(listener.ExtraWakePhrases.Select(x => x.Phrase))));
+
+    var woke = new TaskCompletionSource<double>(TaskCreationOptions.RunContinuationsAsynchronously);
+    var sent = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+    var clock = System.Diagnostics.Stopwatch.StartNew();
+    listener.Woke += who =>
+    {
+        Console.WriteLine($"[wakespeed] summoned : {who ?? "(general)"}");
+        woke.TrySetResult(clock.Elapsed.TotalMilliseconds);
+    };
+    listener.RequestReady += (request, owner) =>
+        sent.TrySetResult($"{request}   [agent {owner ?? "(general)"}, {clock.Elapsed.TotalSeconds:F1}s]");
+
+    listener.StartWithoutMicrophoneForTest();
+
+    using var reader = new NAudio.Wave.AudioFileReader(clip);
+    var resampled = new NAudio.Wave.MediaFoundationResampler(
+        reader, CPT.Core.Stt.ContinuousMicCapture.Format) { ResamplerQuality = 60 };
+
+    const int frameBytes = 16000 * 2 / 20;              // 50 ms of 16 kHz mono PCM
+    var silence = new byte[frameBytes];
+
+    // A second of room first, so the detector calibrates against quiet rather
+    // than against the phrase itself.
+    for (var i = 0; i < 20; i++)
+    {
+        listener.InjectFrameForTest(silence, 0.0002f);
+        await Task.Delay(50);
+    }
+
+    // Everything before this is room noise; the phrase itself is at the end.
+    var wakeStartsAtByte = args.Contains("--after")
+        ? (long)(16000 * 2 * 9.9)
+        : 0L;
+    var fedBytes = 0L;
+    var speechStarted = 0.0;
+    var buffer = new byte[frameBytes];
+    while (true)
+    {
+        var read = resampled.Read(buffer, 0, frameBytes);
+        if (read <= 0) break;
+
+        var frame = new byte[frameBytes];
+        Array.Copy(buffer, frame, read);
+        // With a lead-in clip the phrase does not start at the beginning, so
+        // the clock starts when the LAST section of audio does -- which is when
+        // the user actually says the agent name.
+        fedBytes += read;
+        if (speechStarted == 0 && fedBytes >= wakeStartsAtByte) { clock.Restart(); speechStarted = 1; }
+
+        listener.InjectFrameForTest(frame, CPT.Core.Stt.PcmLevel.RootMeanSquare(frame));
+        await Task.Delay(50);
+    }
+
+    // Then silence, as after anyone stops talking.
+    for (var i = 0; i < 160 && !sent.Task.IsCompleted; i++)
+    {
+        listener.InjectFrameForTest(silence, 0.0002f);
+        await Task.Delay(50);
+    }
+
+    var finished = await Task.WhenAny(woke.Task, Task.Delay(TimeSpan.FromSeconds(20)));
+    if (finished != woke.Task)
+    {
+        Console.WriteLine("[wakespeed] NEVER WOKE");
+        return;
+    }
+
+    Console.WriteLine($"[wakespeed] woke {await woke.Task:F0} ms after the phrase began");
+
+    // The request itself still has to arrive, and has to arrive intact: an
+    // early wake that swallowed the words, or repeated the wake phrase back as
+    // the first half of the request, would be a worse bug than a slow one.
+    var request = await Task.WhenAny(sent.Task, Task.Delay(TimeSpan.FromSeconds(25)));
+    Console.WriteLine(request == sent.Task
+        ? "[wakespeed] request  : " + await sent.Task
+        : "[wakespeed] request  : (none — name only)");
+    return;
+}
+
+if (args.Length >= 1 && args[0] == "ackvoice")
+{
+    // The acknowledgement is the FIRST thing the agent says, and it was the one
+    // line that was never in character: the right voice reading hard-coded
+    // English. This shows what the persona actually says for each situation.
+    var persona = new PersonaStore().Get(settings.ActivePersonaId) ?? throw new InvalidOperationException("no active persona");
+    Console.WriteLine($"[ack] persona = {persona.Name}");
+
+    var cache = new CPT.Core.Tts.AcknowledgementCache(Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "CustomPersonaTranslator", "acknowledgements"));
+
+    var rewriteCli = new CPT.Core.Cli.CliOrchestrator(
+        string.IsNullOrWhiteSpace(settings.Rewrite.ProviderId) ? settings.Cli.ProviderId : settings.Rewrite.ProviderId,
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "CustomPersonaTranslator", "voice"));
+    rewriteCli.Options = settings.Rewrite.OptionsFor(rewriteCli.Provider.Id);
+
+    var clock = System.Diagnostics.Stopwatch.StartNew();
+    await cache.EnsureVoicedAsync(persona, new CPT.Core.Llm.CliPersonaRewriter(rewriteCli));
+    Console.WriteLine($"[ack] voiced in {clock.Elapsed.TotalSeconds:F1}s");
+
+    foreach (var generic in CPT.Core.Tts.AcknowledgementCache.Lines)
+    {
+        var voiced = cache.Voiced(persona, generic);
+        Console.WriteLine($"  {(voiced == generic ? " " : "*")} {generic,-28} -> {voiced}");
+    }
+
+    Console.WriteLine();
+    foreach (var ask in new[] { "why did the build fail", "run the tests", "commit this" })
+        Console.WriteLine($"  \"{ask}\" -> \"{cache.SpokenLineFor(persona, ask)}\"");
+
+    if (args.Contains("--render"))
+    {
+        // Renders them now rather than leaving the first few turns of the next
+        // session to fall back to the preset voice.
+        CPT.Core.Tts.ITtsEngine engine =
+            ChatterboxTts.IsAvailable(settings.ChatterboxPython, settings.ChatterboxScript)
+                ? new ChatterboxTts(settings.ChatterboxPython, settings.ChatterboxScript)
+                : new PiperTts(settings.PiperPath, settings.PiperModelsDir);
+
+        var reference = persona.Voice.VoiceSampleFile ?? persona.Voice.VoiceRef;
+        Console.WriteLine("");
+        Console.WriteLine($"[ack] rendering with {engine.GetType().Name}");
+
+        var renderClock = System.Diagnostics.Stopwatch.StartNew();
+        await cache.BuildAsync(persona, engine, reference, CPT.Core.Stt.WhisperCpp.ForWakeSpotting(
+            settings.WhisperPath,
+            string.IsNullOrWhiteSpace(settings.WhisperModelPath) ? null : settings.WhisperModelPath));
+        Console.WriteLine($"[ack] rendered in {renderClock.Elapsed.TotalSeconds:F0}s");
+    }
+    return;
+}
+
+if (args.Length >= 1 && args[0] == "shortline")
+{
+    // Does the clone mangle SHORT text? Renders the same meaning at three
+    // lengths, several times each, and transcribes what came out. If short
+    // lines are the problem, the short column is where the words go wrong.
+    var persona = new PersonaStore().Get(settings.ActivePersonaId)
+        ?? throw new InvalidOperationException("no active persona");
+    var reference = persona.Voice.VoiceSampleFile ?? persona.Voice.VoiceRef;
+
+    using var engine = new CPT.Core.Tts.ChatterboxTts(settings.ChatterboxPython, settings.ChatterboxScript);
+    await engine.WarmAsync();
+
+    var checker = CPT.Core.Stt.WhisperCpp.ForWakeSpotting(
+        settings.WhisperPath,
+        string.IsNullOrWhiteSpace(settings.WhisperModelPath) ? null : settings.WhisperModelPath);
+
+    string[] candidates =
+    [
+        "Stand by.",
+        "Scanning files.",
+        "Executing test sequence.",
+        "Searching records.",
+    ];
+
+    foreach (var text in candidates)
+    {
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            var path = Path.Combine(Path.GetTempPath(), $"cpt_short_{attempt}.wav");
+            var pcm = new List<byte>();
+            await foreach (var chunk in engine.SynthesizeStreamAsync(text, reference)) pcm.AddRange(chunk);
+
+            using (var w = new NAudio.Wave.WaveFileWriter(path,
+                new NAudio.Wave.WaveFormat(engine.SampleRate, engine.BitsPerSample, engine.Channels)))
+            {
+                var bytes = pcm.ToArray();
+                w.Write(bytes, 0, bytes.Length);
+            }
+
+            var seconds = pcm.Count / (double)(engine.SampleRate * engine.Channels * engine.BitsPerSample / 8);
+            var heard = checker is null ? "(no checker)" : (await checker.TranscribeAsync(path)).Trim();
+            Console.WriteLine($"  {seconds,5:F2}s  {text,-46} -> {heard}");
+        }
+    }
+    return;
+}
+
+if (args.Length >= 1 && args[0] == "fidelity")
+{
+    // Does the persona keep the ANSWER, or just the manner? A terse persona is
+    // supposed to change how something is said, not how much of it survives.
+    var persona = new PersonaStore().Get(settings.ActivePersonaId)
+        ?? throw new InvalidOperationException("no active persona");
+
+    var rewriteCli = new CPT.Core.Cli.CliOrchestrator(
+        string.IsNullOrWhiteSpace(settings.Rewrite.ProviderId)
+            ? settings.Cli.ProviderId : settings.Rewrite.ProviderId,
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "CustomPersonaTranslator", "voice"));
+    rewriteCli.Options = settings.Rewrite.OptionsFor(rewriteCli.Provider.Id);
+
+    const string answer =
+        "The build fails because StandbyListener.cs line 194 uses a char literal that was "
+        + "written as a real newline instead of the escape sequence. Fix it by replacing the "
+        + "literal with backslash-n. There are two other places with the same problem: "
+        + "AcknowledgementCache.cs line 212 and AnthropicStreamJsonReader.cs line 62. "
+        + "After that, run dotnet build with TreatWarningsAsErrors and the CA1859 warning on "
+        + "BuildArguments will still need the return type changed from IReadOnlyList to List.";
+
+    Console.WriteLine($"[fidelity] persona = {persona.Name}");
+    Console.WriteLine($"[fidelity] in  ({answer.Length} chars): {answer}");
+    Console.WriteLine();
+
+    var rewriter = new CPT.Core.Llm.CliPersonaRewriter(rewriteCli);
+    var got = new System.Text.StringBuilder();
+    var clock = System.Diagnostics.Stopwatch.StartNew();
+    await foreach (var chunk in rewriter.StreamRewriteAsync(persona, answer)) got.Append(chunk);
+
+    var outText = got.ToString().Trim();
+    Console.WriteLine($"[fidelity] out ({outText.Length} chars, {clock.Elapsed.TotalSeconds:F1}s): {outText}");
+    Console.WriteLine();
+
+    // The details that must survive, because they are what makes the answer useful.
+    string[] facts = ["StandbyListener", "194", "AcknowledgementCache", "212",
+                      "AnthropicStreamJsonReader", "62", "CA1859", "BuildArguments"];
+    foreach (var fact in facts)
+    {
+        var kept = outText.Contains(fact, StringComparison.OrdinalIgnoreCase);
+        Console.WriteLine($"  {(kept ? "kept " : "LOST ")} {fact}");
+    }
+    return;
+}
+
+static string FirstSentence(string text)
+{
+    var pieces = CPT.Core.Pipeline.TranslationPipeline.SplitForSpeech(text);
+    return pieces.Count > 0 ? pieces[0] : text;
+}
+
+if (args.Length >= 1 && args[0] == "turnclock")
+{
+    // Every stage between a spoken request and a spoken answer, timed. The
+    // target is a REAL answer -- not an acknowledgement -- inside three
+    // seconds, so this exists to say which stage is spending them.
+    var request = args.Length >= 2 ? args[1] : "what is two plus two";
+    var persona = new PersonaStore().Get(settings.ActivePersonaId)
+        ?? throw new InvalidOperationException("no active persona");
+
+    var agentProfile = settings.Agents.Active;
+    var workingDir = agentProfile is not null && !string.IsNullOrWhiteSpace(agentProfile.WorkingDirectory)
+        ? agentProfile.WorkingDirectory
+        : settings.ResolveCliWorkingDirectory();
+
+    using var agentCli = new CPT.Core.Cli.CliOrchestrator(
+        agentProfile?.ProviderId ?? settings.Cli.ProviderId, workingDir);
+    if (agentProfile is not null) agentCli.Options = agentProfile.Options;
+
+    using var rewriteCli = new CPT.Core.Cli.CliOrchestrator(
+        agentProfile?.ProviderId ?? settings.Cli.ProviderId,
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "CustomPersonaTranslator", "voice"));
+    if (agentProfile is not null)
+    {
+        var ro = new Dictionary<string, string>(
+            agentProfile.RewriteOptions.Count > 0 ? agentProfile.RewriteOptions : agentProfile.Options,
+            StringComparer.OrdinalIgnoreCase);
+        ro.Remove("permissions");
+        rewriteCli.Options = ro;
+    }
+
+    Console.WriteLine($"[turn] request  : \"{request}\"");
+    Console.WriteLine($"[turn] agent    : {string.Join(", ", (agentCli.Options ?? new Dictionary<string,string>()).Select(kv => kv.Key + "=" + kv.Value))}");
+    Console.WriteLine($"[turn] folder   : {workingDir}");
+
+    var turnTotal = System.Diagnostics.Stopwatch.StartNew();
+
+    // 1. the acknowledgement, which is a file read
+    var cache = new CPT.Core.Tts.AcknowledgementCache(Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "CustomPersonaTranslator", "acknowledgements"));
+    await cache.EnsureVoicedAsync(persona, new CPT.Core.Llm.CliPersonaRewriter(rewriteCli));
+    var ackClock = System.Diagnostics.Stopwatch.StartNew();
+    var ackPath = cache.ReadyFor(persona, request);
+    Console.WriteLine($"[turn] ack      : {ackClock.ElapsedMilliseconds,6} ms  \"{cache.SpokenLineFor(persona, request)}\"");
+
+    // 2. the agent's own turn
+    var agentClock = System.Diagnostics.Stopwatch.StartNew();
+    var answer = new System.Text.StringBuilder();
+    var asked = args.Contains("--split")
+        ? request
+        : CPT.Core.Llm.CliPersonaRewriter.InVoiceOf(persona, request);
+    await foreach (var turnEvent in agentCli.AskAsync(asked))
+        if (turnEvent.Kind == CPT.Core.Cli.Streaming.CliTurnEventKind.AssistantText) answer.Append(turnEvent.Text);
+    var agentMs = agentClock.ElapsedMilliseconds;
+    Console.WriteLine($"[turn] agent    : {agentMs,6} ms  ({answer.Length} chars)");
+
+    // 3. the persona rewrite
+    if (!args.Contains("--split"))
+    {
+        Console.WriteLine($"[turn] rewrite  :      0 ms  (folded into the agent turn)");
+        Console.WriteLine($"[turn] TOTAL    : {turnTotal.Elapsed.TotalSeconds,6:F1} s to text, before speech");
+        Console.WriteLine($"[turn] said     : {answer.ToString().Trim()}");
+        return;
+    }
+
+    var rwClock = System.Diagnostics.Stopwatch.StartNew();
+    var voiced = new System.Text.StringBuilder();
+    await foreach (var chunk in new CPT.Core.Llm.CliPersonaRewriter(rewriteCli)
+        .StreamRewriteAsync(persona, answer.ToString().Trim())) voiced.Append(chunk);
+    Console.WriteLine($"[turn] rewrite  : {rwClock.ElapsedMilliseconds,6} ms  ({voiced.Length} chars)");
+
+    // 4. time to the FIRST audio of the answer, which is when the user hears it
+    var ttsClock = System.Diagnostics.Stopwatch.StartNew();
+    CPT.Core.Tts.ITtsEngine engine =
+        ChatterboxTts.IsAvailable(settings.ChatterboxPython, settings.ChatterboxScript)
+            ? new ChatterboxTts(settings.ChatterboxPython, settings.ChatterboxScript)
+            : new PiperTts(settings.PiperPath, settings.PiperModelsDir);
+    var reference = persona.Voice.VoiceSampleFile ?? persona.Voice.VoiceRef;
+    var first = voiced.Length > 0 ? voiced.ToString() : answer.ToString();
+    await foreach (var _ in engine.SynthesizeStreamAsync(
+        FirstSentence(first), reference)) break;
+    Console.WriteLine($"[turn] speech   : {ttsClock.ElapsedMilliseconds,6} ms  (to first audio)");
+    (engine as IDisposable)?.Dispose();
+
+    Console.WriteLine($"[turn] TOTAL    : {turnTotal.Elapsed.TotalSeconds,6:F1} s to a real spoken answer");
+    Console.WriteLine($"[turn] said     : {voiced.ToString().Trim()}");
+    return;
+}
+
+if (args.Length >= 1 && args[0] == "cliopt")
+{
+    // Drives one real turn through a named provider with named options, so a
+    // new model in the catalogue is proven against the actual CLI rather than
+    // just against the catalogue.
+    //   dotnet run -- cliopt codex-cli model=gpt-6-astra effort=xhigh
+    var providerId = args.Length >= 2 ? args[1] : CPT.Core.Cli.CliProviderCatalog.CodexId;
+    var chosen = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    foreach (var pair in args.Skip(2).Where(a => a.Contains('=', StringComparison.Ordinal)))
+    {
+        var parts = pair.Split('=', 2);
+        chosen[parts[0]] = parts[1];
+    }
+
+    using var cli = new CPT.Core.Cli.CliOrchestrator(providerId, Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "CustomPersonaTranslator", "voice"));
+    cli.Options = chosen;
+
+    var effect = CPT.Core.Cli.CliOptionEffect.Resolve(cli.Provider, chosen);
+    Console.WriteLine($"[cliopt] provider : {cli.Provider.DisplayName} ({cli.Provider.Command})");
+    Console.WriteLine($"[cliopt] resolved : {CPT.Core.Cli.ExecutableResolver.Resolve(cli.Provider.Command)}");
+    Console.WriteLine($"[cliopt] chosen   : {string.Join(", ", chosen.Select(kv => kv.Key + "=" + kv.Value))}");
+    Console.WriteLine($"[cliopt] argv     : {string.Join(" ", effect.Arguments)}");
+
+    var status = await cli.RefreshAsync();
+    Console.WriteLine($"[cliopt] status   : {status.Readiness} ({status.Detail})");
+    if (!status.IsReady) return;
+
+    var clock = System.Diagnostics.Stopwatch.StartNew();
+    var said = new System.Text.StringBuilder();
+    await foreach (var turnEvent in cli.AskAsync("Reply with exactly: ASTRA OK"))
+    {
+        if (turnEvent.Kind == CPT.Core.Cli.Streaming.CliTurnEventKind.AssistantText) said.Append(turnEvent.Text);
+        else if (turnEvent.Kind == CPT.Core.Cli.Streaming.CliTurnEventKind.Error)
+            Console.WriteLine("[cliopt] ERROR   : " + turnEvent.Text);
+    }
+
+    Console.WriteLine($"[cliopt] reply    : \"{said.ToString().Trim()}\" in {clock.Elapsed.TotalSeconds:F1}s");
+    return;
+}
+
+if (args.Length >= 1 && args[0] == "sayit")
+{
+    // Drives the EXACT path an answer takes once the agent has produced it, and
+    // reports how much audio each stage produced. A turn that answers and then
+    // says nothing is otherwise invisible: the log records the answer, and the
+    // silence afterwards looks identical to the app working correctly.
+    var text = args.Length >= 2
+        ? args[1]
+        : "What would you like me to assess, sir? I’m missing what “mine” refers to.";
+
+    var persona = new PersonaStore().Get(settings.ActivePersonaId)
+        ?? throw new InvalidOperationException("no active persona");
+
+    Console.WriteLine($"[say] persona : {persona.Name}");
+    Console.WriteLine($"[say] answer  : \"{text}\" ({text.Length} chars)");
+
+    var filtered = CPT.Core.Filter.ContentFilter.ToSpoken(text, persona);
+    Console.WriteLine($"[say] filtered: \"{filtered}\" ({filtered.Length} chars)");
+
+    var stripped = CPT.Core.Llm.PersonaRewrite.WithoutInstructions(text, persona.SystemPrompt);
+    Console.WriteLine($"[say] stripped: \"{stripped}\" ({stripped.Length} chars)");
+
+    var sentences = CPT.Core.Pipeline.TranslationPipeline.SplitForSpeech(filtered);
+    Console.WriteLine($"[say] sentences: {sentences.Count}");
+
+    if (filtered.Length == 0 || stripped.Length == 0 || sentences.Count == 0)
+    {
+        Console.WriteLine("[say] NOTHING WOULD BE SPOKEN — this is the bug.");
+        return;
+    }
+
+    CPT.Core.Tts.ITtsEngine engine =
+        ChatterboxTts.IsAvailable(settings.ChatterboxPython, settings.ChatterboxScript)
+            ? new ChatterboxTts(settings.ChatterboxPython, settings.ChatterboxScript)
+            : new PiperTts(settings.PiperPath, settings.PiperModelsDir);
+
+    var reference = persona.Voice.VoiceSampleFile ?? persona.Voice.VoiceRef;
+    long spokenBytes = 0;
+    var clock = System.Diagnostics.Stopwatch.StartNew();
+    foreach (var sentence in sentences)
+    {
+        long bytes = 0;
+        await foreach (var chunk in engine.SynthesizeStreamAsync(sentence, reference)) bytes += chunk.Length;
+        Console.WriteLine($"[say]   \"{sentence}\" -> {bytes} bytes");
+        spokenBytes += bytes;
+    }
+    (engine as IDisposable)?.Dispose();
+
+    Console.WriteLine(spokenBytes > 0
+        ? $"[say] {spokenBytes} bytes of audio in {clock.Elapsed.TotalSeconds:F1}s — it speaks."
+        : "[say] NO AUDIO PRODUCED — this is the bug.");
+    return;
+}
+
+if (args.Length >= 1 && args[0] == "rewrite")
+{
+    // The real rewriter, the real persona, the real CLI. Every reply has been
+    // spoken raw because this step fails, and the log only says "no text".
+    //   dotnet run -- rewrite [personaId] [text]
+    var whoId = args.Length >= 2 ? args[1] : "startrek_computer";
+    var answer = args.Length >= 3 ? args[2] : "The build passed. All 230 tests are green.";
+    var subject = new PersonaStore().Get(whoId) ?? throw new InvalidOperationException("no persona " + whoId);
+
+    var agent = settings.Agents.Agents.FirstOrDefault(a => a.PersonaId == whoId)
+                ?? settings.Agents.Agents.FirstOrDefault();
+    var providerId = string.IsNullOrWhiteSpace(agent?.RewriteProviderId)
+        ? agent?.ProviderId ?? settings.Cli.ProviderId
+        : agent.RewriteProviderId;
+
+    using var cli = new CPT.Core.Cli.CliOrchestrator(providerId, settings.ResolveCliWorkingDirectory());
+    cli.Options = agent?.RewriteOptions.Count > 0 ? agent.RewriteOptions : agent?.Options;
+
+    Console.WriteLine($"[rw] persona  = {subject.Name}");
+    Console.WriteLine($"[rw] provider = {providerId}");
+    Console.WriteLine($"[rw] options  = {string.Join(", ", cli.Options?.Select(o => o.Key + "=" + o.Value) ?? [])}");
+    Console.WriteLine($"[rw] prompt   = {subject.SystemPrompt.Length} chars of persona, {subject.FewShotQuotes.Count} quotes");
+
+    // Straight to the orchestrator, printing every event, so an error the
+    // rewriter swallows is visible.
+    var promptMethod = typeof(CliPersonaRewriter).GetMethod(
+        "BuildPrompt", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+    var prompt = (string)promptMethod.Invoke(null, [subject, answer])!;
+
+    File.WriteAllText(Path.Combine(Path.GetTempPath(), "cpt_rewrite_prompt.txt"), prompt);
+    Console.WriteLine("[rw] prompt written to " + Path.Combine(Path.GetTempPath(), "cpt_rewrite_prompt.txt"));
+
+    // Same binary, same arguments, but run directly so stdout and stderr are
+    // visible instead of being parsed and discarded.
+    var raw = await CPT.Core.Cli.ProcessLauncher.RunAsync(
+        "claude",
+        ["-p", prompt, "--output-format", "stream-json", "--verbose",
+         "--model", "sonnet", "--permission-mode", "bypassPermissions"],
+        new CPT.Core.Cli.ProcessRunOptions { Timeout = TimeSpan.FromMinutes(2) });
+
+    Console.WriteLine("[rw] direct run: started=" + raw.Started + " exit=" + raw.ExitCode);
+    Console.WriteLine("[rw] stdout: " + (raw.StandardOutput.Length > 300 ? raw.StandardOutput[..300] : raw.StandardOutput));
+    Console.WriteLine("[rw] stderr: " + (raw.StandardError.Length > 300 ? raw.StandardError[..300] : raw.StandardError));
+
+    var clock = System.Diagnostics.Stopwatch.StartNew();
+    var built = new System.Text.StringBuilder();
+    await foreach (var turn in cli.AskAsync(prompt))
+    {
+        Console.WriteLine("[rw]   " + turn.Kind + ": " + (turn.Text ?? "").Replace(Environment.NewLine, " ").Replace("u000A", " "));
+        if (turn.Kind == CPT.Core.Cli.Streaming.CliTurnEventKind.AssistantText) built.Append(turn.Text);
+    }
+
+    Console.WriteLine($"[rw] {clock.ElapsedMilliseconds} ms");
+    Console.WriteLine($"[rw] in  : \"{answer}\"");
+    Console.WriteLine($"[rw] out : \"{built}\"");
+    Console.WriteLine(built.Length == 0
+        ? "[rw] NOTHING came back. This is why replies are spoken raw."
+        : "[rw] the rewrite works.");
+    return;
+}
 
 if (args.Length >= 1 && args[0] == "acklat")
 {
@@ -288,7 +810,7 @@ if (args.Length >= 1 && args[0] == "wakethenask")
 
     string? got = null;
     string? forAgent = null;
-    session.Woke += () => Console.WriteLine("[two] woke");
+    session.Woke += who => Console.WriteLine("[two] woke" + (who is null ? "" : " for agent " + who));
     session.Captured += text => Console.WriteLine("[two] captured: " + text);
     session.RequestReady += (r, agent) => { got = r; forAgent = agent; };
     session.StartWithoutMicrophoneForTest();
@@ -370,7 +892,7 @@ if (args.Length >= 1 && args[0] == "wakelive")
     var woke = false;
     string? request = null;
     string? addressed = null;
-    live.Woke += () => woke = true;
+    live.Woke += _ => woke = true;
     live.Captured += text => Console.WriteLine("[live] captured: " + text);
     live.Failed += message => Console.WriteLine("[live] FAILED: " + message);
     live.LevelChanged += _ => { };
@@ -496,7 +1018,7 @@ if (args.Length >= 1 && args[0] == "standbyphysical")
     var woke = false;
     string? request = null;
     string? who = null;
-    live.Woke += () => { woke = true; Console.WriteLine("[phys] WOKE"); };
+    live.Woke += who => { woke = true; Console.WriteLine("[phys] WOKE" + (who is null ? "" : " for agent " + who)); };
     live.Captured += text => Console.WriteLine("[phys] captured: " + text);
     live.Failed += message => Console.WriteLine("[phys] FAILED: " + message);
     live.RequestReady += (r, agent) => { request = r; who = agent; };
@@ -561,7 +1083,7 @@ if (args.Length >= 1 && args[0] == "standby")
     Console.WriteLine($"[standby] send   = \"{settings.Standby.SendPhrase}\"");
 
     await using var listener = new CPT.Core.Voice.StandbyListener(whisper, settings.Standby);
-    listener.Woke += () => Console.WriteLine("[standby] WOKE");
+    listener.Woke += who => Console.WriteLine("[standby] WOKE" + (who is null ? "" : " for agent " + who));
     listener.Captured += captured => Console.WriteLine("[standby] captured: " + captured);
     listener.Cancelled += () => Console.WriteLine("[standby] cancelled");
     listener.Failed += message => Console.WriteLine("[standby] FAILED: " + message);

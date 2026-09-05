@@ -142,6 +142,7 @@
                                             <ColumnDefinition Width="Auto"/>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
         
                                         <Viewbox Grid.Column="0" Width="15" Height="15" Margin="0,0,8,0">
@@ -169,11 +170,36 @@
                                                        FontSize="10"
                                                        TextTrimming="CharacterEllipsis"/>
                                         </StackPanel>
+                                        <!-- Stop. Sits inside the talk button and appears only
+                                             while the agent is working, because a coding turn can
+                                             run for a minute and there was no way out of one you
+                                             did not mean to start. It swallows the click so the
+                                             surrounding hold-to-talk does not also fire. -->
+                                        <Border x:Name="CancelButton"
+                                                Grid.Column="2"
+                                                Width="20" Height="20"
+                                                Margin="6,0,2,0"
+                                                VerticalAlignment="Center"
+                                                Background="#FF3A2323"
+                                                BorderBrush="#FF6E3A3A"
+                                                BorderThickness="1"
+                                                CornerRadius="10"
+                                                Cursor="Hand"
+                                                Visibility="Collapsed"
+                                                PreviewMouseLeftButtonDown="OnCancelAgent"
+                                                AutomationProperties.Name="Stop the agent"
+                                                ToolTip="Stop what the agent is doing  (Esc)">
+                                            <TextBlock Text="&#x2715;"
+                                                       Foreground="#FFFF9B9B"
+                                                       FontSize="10"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"/>
+                                        </Border>
                                         <!-- Ready to listen. A pulsing green dot inside the talk
                                              button, because standby's state is otherwise invisible:
                                              the tone says it woke, this says it still is. -->
                                         <Ellipse x:Name="ListeningDot"
-                                                 Grid.Column="2"
+                                                 Grid.Column="3"
                                                  Width="9" Height="9"
                                                  Margin="8,0,2,0"
                                                  VerticalAlignment="Center"

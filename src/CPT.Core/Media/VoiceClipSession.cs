@@ -44,10 +44,31 @@ public sealed class VoiceClipSession
         public double End { get; set; }
     }
 
-    /// <summary>Where the session is kept.</summary>
-    public static string FilePath { get; } = Path.Combine(
+    private static string Folder { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "CustomPersonaTranslator", "clip-session.json");
+        "CustomPersonaTranslator");
+
+    /// <summary>
+    /// Where one persona's session is kept.
+    ///
+    /// Per persona, because a voice belongs to a persona: there was a single
+    /// shared file, so opening the clipper for ANY persona restored the link
+    /// and marks of whichever one had been edited last. With several personas
+    /// that is not a small annoyance -- it silently offers you the wrong
+    /// person's voice, and the marks look plausible enough to keep.
+    /// </summary>
+    public static string PathFor(string? personaId) =>
+        Path.Combine(Folder, string.IsNullOrWhiteSpace(personaId)
+            ? "clip-session.json"
+            : "clip-session-" + Sanitise(personaId) + ".json");
+
+    /// <summary>Keeps an id that came from a persona file safe to put in a path.</summary>
+    private static string Sanitise(string id)
+    {
+        var clean = new System.Text.StringBuilder(id.Length);
+        foreach (var c in id) clean.Append(char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '_');
+        return clean.ToString();
+    }
 
     /// <summary>True when there is something worth restoring.</summary>
     public bool HasWork => !string.IsNullOrWhiteSpace(Url);
@@ -77,13 +98,25 @@ public sealed class VoiceClipSession
     }
 
     /// <summary>Reads the saved session, or null when there is none or it is unreadable.</summary>
-    public static VoiceClipSession? Load()
+    public static VoiceClipSession? Load(string? personaId = null)
     {
         try
         {
-            if (!File.Exists(FilePath)) return null;
+            var path = PathFor(personaId);
 
-            var session = JsonSerializer.Deserialize<VoiceClipSession>(File.ReadAllText(FilePath), ReadOptions);
+            // A session saved before sessions were per-persona belongs to
+            // whoever opens the clipper first, and only once: it is read from
+            // the old shared file and saved to a persona's own from then on.
+            if (!File.Exists(path) && personaId is { Length: > 0 })
+            {
+                var shared = PathFor(null);
+                if (!File.Exists(shared)) return null;
+                path = shared;
+            }
+
+            if (!File.Exists(path)) return null;
+
+            var session = JsonSerializer.Deserialize<VoiceClipSession>(File.ReadAllText(path), ReadOptions);
             return session is { HasWork: true } ? session : null;
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
@@ -97,14 +130,15 @@ public sealed class VoiceClipSession
     /// Writes the session. Failing to save is never worth interrupting the user
     /// for -- they are in the middle of marking a video.
     /// </summary>
-    public void Save()
+    public void Save(string? personaId = null)
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            var temporary = FilePath + ".tmp";
+            var path = PathFor(personaId);
+            Directory.CreateDirectory(Folder);
+            var temporary = path + ".tmp";
             File.WriteAllText(temporary, JsonSerializer.Serialize(this, WriteOptions));
-            File.Move(temporary, FilePath, overwrite: true);
+            File.Move(temporary, path, overwrite: true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -113,11 +147,12 @@ public sealed class VoiceClipSession
     }
 
     /// <summary>Forgets the saved session.</summary>
-    public static void Clear()
+    public static void Clear(string? personaId = null)
     {
         try
         {
-            if (File.Exists(FilePath)) File.Delete(FilePath);
+            var path = PathFor(personaId);
+            if (File.Exists(path)) File.Delete(path);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

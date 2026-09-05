@@ -83,4 +83,39 @@ public class CliPersonaRewriterTests
     {
         Assert.Equal(expected, Unfence(reply));
     }
+
+    [Fact]
+    public void Numbered_lines_come_back_in_order()
+    {
+        var parsed = CliPersonaRewriter.ParseNumbered(
+            "1. Working.\n2. Acknowledged.\n3. Stand by.", 3);
+
+        Assert.NotNull(parsed);
+        Assert.Equal(["Working.", "Acknowledged.", "Stand by."], parsed);
+    }
+
+    [Fact]
+    public void A_short_set_is_rejected_rather_than_half_applied()
+    {
+        // Half in character and half in plain English reads as a bug, not a style.
+        Assert.Null(CliPersonaRewriter.ParseNumbered("1. Working.\n2. Acknowledged.", 3));
+    }
+
+    [Fact]
+    public void Prose_that_dropped_the_numbering_is_rejected()
+    {
+        // What the general rewrite prompt actually returned for a list: the
+        // right words, in the right voice, with no way to tell them apart.
+        Assert.Null(CliPersonaRewriter.ParseNumbered(
+            "Working. Acknowledged. Stand by. Checking build status.", 4));
+    }
+
+    [Fact]
+    public void Commentary_around_the_list_is_ignored()
+    {
+        var parsed = CliPersonaRewriter.ParseNumbered(
+            "Here you go:\n\n1. Working.\n2. Stand by.\n\nLet me know.", 2);
+
+        Assert.Equal(["Working.", "Stand by."], parsed);
+    }
 }

@@ -158,6 +158,30 @@ public partial class SettingsWindow : Window
         SaveAgents();
     }
 
+    /// <summary>
+    /// Picks the folder this agent works in.
+    ///
+    /// Typing a path is possible but this is the setting people get wrong by
+    /// leaving blank, and a picker makes it obvious that a folder is expected.
+    /// </summary>
+    private void OnBrowseAgentFolder(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not AgentRow agent) return;
+
+        var picker = new Microsoft.Win32.OpenFolderDialog
+        {
+            Title = "Which project should " + (agent.Name is { Length: > 0 } n ? n : "this agent") + " work on?",
+            InitialDirectory = Directory.Exists(agent.WorkingDirectory)
+                ? agent.WorkingDirectory
+                : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        };
+
+        if (picker.ShowDialog(this) != true) return;
+
+        agent.WorkingDirectory = picker.FolderName;
+        SaveAgents();
+    }
+
     /// <summary>Records straight into one of the standby phrase boxes.</summary>
     private async void OnRecordStandbyPhrase(object sender, RoutedEventArgs e)
     {

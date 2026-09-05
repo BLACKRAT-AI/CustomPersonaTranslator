@@ -101,6 +101,13 @@ Filename: "powershell.exe"; \
     StatusMsg: "Setting up Chatterbox voice cloning (large download, GPU recommended)…"; \
     Tasks: cloning
 
+; First run opens the CLI setup screen, so a new user lands directly on the one
+; step CPT cannot do for them: signing in to their coding CLI.
+Filename: "{app}\{#MyAppExeName}"; \
+    Parameters: "--setup"; \
+    Description: "Connect a coding CLI"; \
+    Flags: postinstall nowait skipifsilent
+
 ; Auto-launch.
 Filename: "{app}\{#MyAppExeName}"; \
     WorkingDir: "{app}"; \
@@ -135,10 +142,3 @@ begin
     Result := MsgBox(msg, mbConfirmation, MB_YESNO) = IDYES;
   end;
 end;
-
-; First run opens the CLI setup screen, so a new user lands directly on the one
-; step CPT cannot do for them: signing in to their coding CLI.
-Filename: "{app}\{#MyAppExeName}"; \
-    Parameters: "--setup"; \
-    Description: "Connect a coding CLI"; \
-    Flags: postinstall nowait skipifsilent

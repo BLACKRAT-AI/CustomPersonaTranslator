@@ -41,6 +41,24 @@ public sealed class AppServices : IDisposable
 {
     private readonly SemaphoreSlim _agentTurnLock = new(1, 1);
     private CancellationTokenSource? _currentTranslation;
+
+    /// <summary>Cancels the agent turn in flight, if there is one.</summary>
+    private CancellationTokenSource? _currentTurn;
+
+    /// <summary>
+    /// Cancels background voice rendering, so a real reply never queues behind it.
+    ///
+    /// The clone is ONE subprocess and it is strictly serial. Pre-rendering two
+    /// personas' acknowledgements is about forty clips at roughly four seconds
+    /// each, and while that was running an actual answer waited its turn: the
+    /// agent replied in the log and then said nothing for minutes. Warming is
+    /// worth doing and worth abandoning the moment there is something real to
+    /// say.
+    /// </summary>
+    private CancellationTokenSource? _warming;
+
+    /// <summary>True while a turn is running, so the UI can offer to stop it.</summary>
+    public bool IsAgentBusy => _currentTurn is { IsCancellationRequested: false };
     private string? _lastAdapter;
     private bool _disposed;
 
@@ -139,7 +157,7 @@ public sealed class AppServices : IDisposable
 
         ContinuousMicCapture.DeviceIndex = Settings.MicrophoneDevice;
         StartCloneWatchdog();
-        WarmAcknowledgements();
+        WarmEveryAgentVoice();
     }
 
 
@@ -217,6 +235,19 @@ public sealed class AppServices : IDisposable
         if (string.IsNullOrWhiteSpace(request)) return;
 
         await _agentTurnLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        // Held so the user can stop this turn from the bar. A coding turn can
+        // run for a minute, and until now the only way out of one you did not
+        // mean to start was to wait for it.
+        var turn = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var previousTurn = Interlocked.Exchange(ref _currentTurn, turn);
+        previousTurn?.Dispose();
+        cancellationToken = turn.Token;
+
+        // Give the voice back. Anything still being pre-rendered can wait; this
+        // is the reply the user is waiting to hear.
+        PauseVoiceWarming();
+
         try
         {
             OnAgentBusy?.Invoke(true);
@@ -234,7 +265,11 @@ public sealed class AppServices : IDisposable
             var reply = new StringBuilder();
             string? failure = null;
 
-            await foreach (var turnEvent in Cli.AskAsync(request, cancellationToken).ConfigureAwait(false))
+            // Asked to answer IN VOICE, so no second CLI turn is needed to
+            // rephrase it. That turn cost as much as the answer itself.
+            var asked = CliPersonaRewriter.InVoiceOf(ActivePersona, request);
+
+            await foreach (var turnEvent in Cli.AskAsync(asked, cancellationToken).ConfigureAwait(false))
             {
                 switch (turnEvent.Kind)
                 {
@@ -275,15 +310,25 @@ public sealed class AppServices : IDisposable
                 }
             }
 
-            if (answer.Length > 0)
+            // The persona guide travels in the prompt, so it can come back in the
+            // answer. It must never be read aloud.
+            var spoken = PersonaRewrite.WithoutInstructions(answer, ActivePersona.SystemPrompt);
+            if (spoken.Length != answer.Length)
+                CptLog.Write($"[agent] stripped {answer.Length - spoken.Length} chars of persona guide from the answer");
+
+            if (spoken.Length > 0)
             {
-                await SpeakInPersonaAsync(answer, cancellationToken).ConfigureAwait(false);
+                await Pipeline.SpeakAsync(ActivePersona, spoken, cancellationToken).ConfigureAwait(false);
             }
             else
             {
-                var message = failure ?? "The agent returned nothing.";
-                CptLog.Write("[agent] " + message);
+                // Said out loud, not just logged. A turn that fails silently is
+                // indistinguishable from one being ignored, and the user is
+                // across the room waiting for a voice, not watching a toast.
+                CptLog.Write("[agent] " + (failure ?? "the turn produced no answer"));
+                var message = CliInstaller.Explain(failure);
                 OnNotification?.Invoke(message);
+                await Pipeline.SpeakAsync(ActivePersona, message, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
@@ -299,9 +344,51 @@ public sealed class AppServices : IDisposable
         }
         finally
         {
+            Interlocked.CompareExchange(ref _currentTurn, null, turn);
+            turn.Dispose();
             OnAgentBusy?.Invoke(false);
             _agentTurnLock.Release();
+
+            // Whatever was left unrendered can finish now.
+            WarmEveryAgentVoice();
         }
+    }
+
+    /// <summary>Stops background voice rendering. Whatever finished is kept.</summary>
+    private void PauseVoiceWarming()
+    {
+        var warming = Interlocked.Exchange(ref _warming, null);
+        if (warming is null) return;
+
+        try { warming.Cancel(); } catch (ObjectDisposedException) { }
+        warming.Dispose();
+    }
+
+    /// <summary>
+    /// Stops whatever the agent is doing: the turn in flight and anything still
+    /// being spoken.
+    ///
+    /// Both, because they are one thing to the user. Stopping the CLI while a
+    /// minute of synthesised speech is still queued would look like the button
+    /// did nothing.
+    /// </summary>
+    public void CancelAgent()
+    {
+        var turn = Interlocked.Exchange(ref _currentTurn, null);
+        var speech = Interlocked.Exchange(ref _currentTranslation, null);
+
+        if (turn is null && speech is null) return;
+
+        CptLog.Write("[agent] cancelled by the user");
+
+        try { turn?.Cancel(); } catch (ObjectDisposedException) { }
+        try { speech?.Cancel(); } catch (ObjectDisposedException) { }
+
+        turn?.Dispose();
+        speech?.Dispose();
+
+        Pipeline.StopSpeaking();
+        OnAgentBusy?.Invoke(false);
     }
 
 
@@ -338,7 +425,9 @@ public sealed class AppServices : IDisposable
         try
         {
             await Pipeline.SpeakWithPresetAsync(
-                ActivePersona, AcknowledgementCache.Lines[0], cancellationToken).ConfigureAwait(false);
+                ActivePersona,
+                Acknowledgements.SpokenLineFor(ActivePersona, request),
+                cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
@@ -351,9 +440,33 @@ public sealed class AppServices : IDisposable
     /// Renders this persona's acknowledgements in the background, if they are
     /// missing. Runs at startup and whenever the persona changes.
     /// </summary>
-    public void WarmAcknowledgements()
+    public void WarmAcknowledgements() => WarmAcknowledgementsFor(ActivePersona);
+
+    /// <summary>
+    /// Gets every agent's voice ready, not just the one in front.
+    ///
+    /// An agent is a loadout -- a CLI, a persona and a cloned voice -- and
+    /// calling one by name switches all three at once. If only the active
+    /// agent's lines had been rendered, the moment you said another agent's
+    /// name it would answer in the preset voice while its own was still being
+    /// built, which is the one moment it most obviously should sound like
+    /// itself. Rendering is serialised inside the cache, so this is a queue
+    /// rather than a stampede, and each line is rendered once ever.
+    /// </summary>
+    public void WarmEveryAgentVoice()
     {
-        var persona = ActivePersona;
+        WarmAcknowledgements();
+
+        foreach (var agent in Settings.Agents.Agents)
+        {
+            if (string.IsNullOrWhiteSpace(agent.PersonaId)) continue;
+            if (string.Equals(agent.PersonaId, ActivePersona.Id, StringComparison.Ordinal)) continue;
+            if (Personas.Get(agent.PersonaId) is { } persona) WarmAcknowledgementsFor(persona);
+        }
+    }
+
+    private void WarmAcknowledgementsFor(Persona persona)
+    {
         var engine = string.Equals(persona.Voice.Engine, "chatterbox", StringComparison.OrdinalIgnoreCase)
                      && CloneTts is not null
             ? CloneTts
@@ -363,7 +476,26 @@ public sealed class AppServices : IDisposable
             ? persona.Voice.VoiceSampleFile!
             : persona.Voice.VoiceRef;
 
-        _ = Task.Run(() => Acknowledgements.BuildAsync(persona, engine, voiceRef));
+        var warming = _warming ??= new CancellationTokenSource();
+        var token = warming.Token;
+
+        _ = Task.Run(async () =>
+        {
+            // Words first, then voice. Rendering the plain English wording and
+            // then discovering the persona says it differently would mean
+            // synthesising every line twice.
+            await Acknowledgements.EnsureVoicedAsync(persona, Rewriter, token).ConfigureAwait(false);
+
+
+            // The small model listens back to each rendered line. It is the
+            // same one that spots the wake phrase, so it is already installed
+            // and costs half a second per check.
+            var checker = WhisperCpp.ForWakeSpotting(
+                Settings.WhisperPath, NullIfEmpty(Settings.WhisperModelPath));
+
+            await Acknowledgements.BuildAsync(persona, engine, voiceRef, checker, token)
+                .ConfigureAwait(false);
+        }, token);
     }
 
     /// <summary>
@@ -537,18 +669,41 @@ public sealed class AppServices : IDisposable
             ? agent.ProviderId
             : agent.RewriteProviderId;
 
-        RewriteCli.Select(rewriteProvider, directory);
+        // The rewrite runs in an EMPTY directory, with no inherited permissions.
+        //
+        // It was running in the agent's own working directory with the agent's
+        // "never ask" permissions, so a request to rephrase three sentences
+        // became a repository investigation: it read files, took eight seconds
+        // and answered about the project instead. A text transformation has no
+        // business seeing a codebase.
+        RewriteCli.Select(rewriteProvider, RewriteWorkspace());
 
-        // Unset rewrite options inherit the agent's, because the agent's are known
-        // to work: its model has been chosen and used. Left empty, the rewrite
-        // ran on the CLI's default model -- which this Claude Code refuses -- so
-        // every rewrite failed, every reply was spoken raw, and the persona was
-        // never heard at all.
-        RewriteCli.Options = agent.RewriteOptions.Count > 0 || rewriteProvider != agent.ProviderId
-            ? agent.RewriteOptions
-            : agent.Options;
+        var rewriteOptions = new Dictionary<string, string>(
+            agent.RewriteOptions.Count > 0 ? agent.RewriteOptions : agent.Options,
+            StringComparer.OrdinalIgnoreCase);
+        rewriteOptions.Remove("permissions");
+        RewriteCli.Options = rewriteOptions;
 
         CptLog.Write($"[agent] {agent.Name}: answers on {agent.ProviderId}, speaks via {rewriteProvider}");
+    }
+
+
+    /// <summary>
+    /// An empty folder for the rewrite CLI to run in.
+    ///
+    /// Deliberately empty and outside any project: a coding CLI given a
+    /// repository will use it, and the rewrite has nothing to look up. This is
+    /// the difference between a three-second rephrase and an eight-second
+    /// investigation that answers the wrong question.
+    /// </summary>
+    private static string RewriteWorkspace()
+    {
+        var folder = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "CustomPersonaTranslator", "voice");
+
+        Directory.CreateDirectory(folder);
+        return folder;
     }
 
     /// <summary>Re-reads the agent list after it has been edited in settings.</summary>
@@ -556,6 +711,10 @@ public sealed class AppServices : IDisposable
     {
         PublishWakePhrases();
         if (Settings.Agents.Active is { } agent) ApplyAgentCli(agent);
+
+        // A newly added agent has no voice rendered yet, and the moment it is
+        // worth having is the first time its name is said.
+        WarmEveryAgentVoice();
         OnAgentsChanged?.Invoke();
     }
 
@@ -631,10 +790,27 @@ public sealed class AppServices : IDisposable
 
     private StandbyListener CreateStandbyListener()
     {
-        var listener = new StandbyListener(Stt, Settings.Standby);
+        // Two recognisers, because the two jobs want opposite things. Hearing a
+        // request accurately wants the largest model installed; noticing your
+        // own name wants the fastest, and with small.en that difference was the
+        // three seconds between being called and answering.
+        var spotter = WhisperCpp.ForWakeSpotting(
+            Settings.WhisperPath, NullIfEmpty(Settings.WhisperModelPath));
 
-        listener.Woke += () =>
+        CptLog.Write(spotter is null
+            ? "[standby] no small model installed; waking uses " + Stt.ModelPath
+            : "[standby] wake spotter: " + Path.GetFileName(spotter.ModelPath));
+
+        var listener = new StandbyListener(Stt, Settings.Standby, spotter);
+
+        listener.Woke += addressed =>
         {
+            // Whoever was named is who is now here. Doing this on the WAKE, not
+            // on the finished request, is what makes calling an agent by name
+            // work: saying "hey jarvis" and then pausing used to summon nobody,
+            // because the switch waited for a request that never came.
+            if (addressed is { Length: > 0 }) SetActiveAgent(addressed);
+
             // A tone, so waking is something you hear rather than something you
             // have to test for by speaking.
             ReadyChime.PlayReady();

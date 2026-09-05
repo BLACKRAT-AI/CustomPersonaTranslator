@@ -1,4 +1,6 @@
 using System;
+using System.IO;
+using System.Diagnostics;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -103,17 +105,86 @@ public static class CliInstaller
             return "npm was not found, so the CLI cannot be updated automatically.";
 
         progress?.Report($"Updating {provider.DisplayName}...");
-        CptLog.Write($"[cli] updating {provider.Id} to the latest published version");
+
+        // Into CPT's OWN folder, not the machine-wide one.
+        //
+        // A global update replaces a binary the user may be running, and npm on
+        // Windows fails outright rather than waiting. Observed: an all-day codex
+        // session held the file, npm wrote the new package metadata but not the
+        // new binary, and every turn afterwards failed with "requires a newer
+        // version of Codex" -- a state no retry could leave, because the update
+        // reported the same error each time.
+        //
+        // The app's own copy is searched first (see ExecutableResolver), so this
+        // both fixes the app and leaves the user's install and their running
+        // work completely alone.
+        var privateFolder = Path.Combine(ExecutableResolver.PrivateToolsFolder, provider.Id);
+        Directory.CreateDirectory(privateFolder);
+
+        CptLog.Write($"[cli] updating {provider.Id} into {privateFolder}");
 
         var failure = await RunInstallCommandAsync(
             "npm",
-            ["install", "--global", "--no-fund", "--no-audit", package + "@latest"],
+            ["install", "--global", "--prefix", privateFolder, "--no-fund", "--no-audit",
+             package + "@latest"],
             progress,
             cancellationToken).ConfigureAwait(false);
+
+        // npm cannot replace a binary that is running, and on Windows it fails
+        // with EBUSY rather than waiting. This happens precisely when the update
+        // is most likely to be triggered -- a turn just failed because the tool
+        // was too old, so the tool was running a moment ago. Retrying once after
+        // its processes have exited turns a dead end into a pause.
+        if (failure is not null && failure.Contains("EBUSY", StringComparison.OrdinalIgnoreCase))
+        {
+            progress?.Report($"{provider.DisplayName} was still running — waiting for it to close…");
+            CptLog.Write($"[cli] update of {provider.Id} hit EBUSY; waiting for it to exit");
+
+            if (await WaitForExitAsync(provider.Command, cancellationToken).ConfigureAwait(false))
+            {
+                failure = await RunInstallCommandAsync(
+                    "npm",
+                    ["install", "--global", "--prefix", privateFolder, "--no-fund", "--no-audit",
+                     package + "@latest"],
+                    progress,
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
 
         if (failure is null) progress?.Report($"{provider.DisplayName} updated.");
         else CptLog.Write($"[cli] update of {provider.Id} failed: {failure}");
         return failure;
+    }
+
+    /// <summary>
+    /// Waits briefly for every process of this command to exit. True when none
+    /// are left, so the caller knows whether retrying is worth anything.
+    /// </summary>
+    private static async Task<bool> WaitForExitAsync(
+        string command, CancellationToken cancellationToken)
+    {
+        var name = Path.GetFileNameWithoutExtension(command);
+
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            Process[] running;
+            try { running = Process.GetProcessesByName(name); }
+            catch (InvalidOperationException) { return true; }
+
+            try
+            {
+                if (running.Length == 0) return true;
+            }
+            finally
+            {
+                foreach (var process in running) process.Dispose();
+            }
+
+            try { await Task.Delay(500, cancellationToken).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return false; }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -138,6 +209,8 @@ public static class CliInstaller
             || text.Contains("no longer supported")
             || text.Contains("unsupported version")
             || text.Contains("or newer is required")
+            || text.Contains("requires a newer version")   // Codex, refusing gpt-6-astra
+            || text.Contains("requires a newer")
             || text.Contains("does not support this model")
             || text.Contains("please update")
             || text.Contains("please upgrade")
@@ -205,5 +278,42 @@ public static class CliInstaller
                  "--accept-package-agreements", "--accept-source-agreements"],
                 "winget");
         }
+    }
+
+    /// <summary>
+    /// A short sentence a person can act on, for a turn that produced nothing.
+    ///
+    /// Raw CLI failures are JSON, stack traces and MCP transport noise. Spoken
+    /// aloud they are worse than silence, and shown in a toast they still leave
+    /// the user waiting for an answer that is never coming. Observed here: a
+    /// turn died with a four-hundred saying the model needed a newer Codex, and
+    /// all the agent did was go quiet.
+    /// </summary>
+    public static string Explain(string? failure)
+    {
+        if (string.IsNullOrWhiteSpace(failure)) return "That turn produced no answer.";
+
+        if (LooksOutOfDate(failure))
+            return "That model needs a newer version of the command line tool.";
+
+        ReadOnlySpan<(string Symptom, string Meaning)> known =
+        [
+            ("not enough space", "This machine has run out of disk space."),
+            ("rate limit", "The model is rate limited. Try again shortly."),
+            ("429", "The model is rate limited. Try again shortly."),
+            ("unauthorized", "The command line tool is not signed in."),
+            ("401", "The command line tool is not signed in."),
+            ("quota", "That account is out of quota."),
+            ("timed out", "That turn took too long and was stopped."),
+            ("enoent", "The command line tool could not be found."),
+            ("ebusy", "The tool is in use and could not be updated. Close it and try again."),
+        ];
+
+        foreach (var (symptom, meaning) in known)
+        {
+            if (failure.Contains(symptom, StringComparison.OrdinalIgnoreCase)) return meaning;
+        }
+
+        return "That turn failed.";
     }
 }

@@ -19,6 +19,14 @@ public sealed class LlamaCppClient : IDisposable, IPersonaRewriter
     private readonly HttpClient _http;
     private readonly string _baseUrl;
 
+    /// <summary>
+    /// Not supported here. The local path is a fallback for speaking one
+    /// answer, and returning null simply keeps the plain wording.
+    /// </summary>
+    public Task<IReadOnlyList<string>?> RewriteLinesAsync(
+        Persona persona, IReadOnlyList<string> lines, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<string>?>(null);
+
     public LlamaCppClient(string baseUrl = "http://127.0.0.1:18080")
     {
         _http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };

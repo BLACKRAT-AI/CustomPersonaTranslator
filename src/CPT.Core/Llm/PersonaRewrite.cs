@@ -1,4 +1,5 @@
 using System;
+using System.Text;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -82,5 +83,61 @@ public static class PersonaRewrite
             words.Add(word);
         }
         return words;
+    }
+
+    /// <summary>
+    /// Removes any of the persona's own instructions that came back as answer.
+    ///
+    /// Asking one CLI turn to both do the work and speak in character means the
+    /// character description travels in the prompt, and a model that mishandles
+    /// it reads it out: observed here as the agent announcing "Rewrite the
+    /// user's text in the voice of J.A.R.V.I.S., a sophisticated, unflappable
+    /// British AI butler..." to a user who had asked it something else.
+    ///
+    /// Compared line by line rather than as a whole, because a leak is usually
+    /// a paragraph of the guide followed by the real answer, and the real answer
+    /// is worth keeping.
+    /// </summary>
+    public static string WithoutInstructions(string? answer, string? personaPrompt)
+    {
+        if (string.IsNullOrWhiteSpace(answer)) return "";
+        if (string.IsNullOrWhiteSpace(personaPrompt)) return answer.Trim();
+
+        var guide = Normalise(personaPrompt);
+        var kept = new List<string>();
+
+        foreach (var line in answer.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var text = line.Trim();
+            if (text.Length == 0) continue;
+
+            // Marker lines are never speech.
+            if (text.StartsWith("<<<", StringComparison.Ordinal)
+                || text.EndsWith(">>>", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            // A short line can coincide with the guide by accident; a long one
+            // that appears in it verbatim was copied from it.
+            var normalised = Normalise(text);
+            if (normalised.Length >= 40 && guide.Contains(normalised, StringComparison.Ordinal)) continue;
+
+            kept.Add(text);
+        }
+
+        return string.Join(" ", kept).Trim();
+    }
+
+    /// <summary>Lower case, single spaces, no punctuation, for comparing wording.</summary>
+    private static string Normalise(string text)
+    {
+        var clean = new StringBuilder(text.Length);
+        foreach (var c in text)
+        {
+            if (char.IsLetterOrDigit(c)) clean.Append(char.ToLowerInvariant(c));
+            else if (clean.Length > 0 && clean[^1] != ' ') clean.Append(' ');
+        }
+        return clean.ToString().Trim();
     }
 }

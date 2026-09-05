@@ -56,6 +56,21 @@ public sealed class AgentRow : ObservableObject
         set { _agent.Name = value; Raise(); }
     }
 
+    /// <summary>
+    /// The project this agent works on.
+    ///
+    /// The single most consequential setting here, and it had no field at all:
+    /// left blank the CLI runs in the user's home folder, where there is no code
+    /// to read. An agent asked about a build, a test or a file then answers from
+    /// general knowledge, which reads exactly like an agent that is not very
+    /// bright.
+    /// </summary>
+    public string WorkingDirectory
+    {
+        get => _agent.WorkingDirectory;
+        set { _agent.WorkingDirectory = value ?? ""; Raise(); }
+    }
+
     /// <summary>Every phrase that summons this agent.</summary>
     public PhraseList Phrases { get; }
 

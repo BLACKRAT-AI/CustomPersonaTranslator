@@ -180,6 +180,24 @@
                                             </Border>
                                         </Grid>
 
+                                        <!-- Which project this agent works on. Blank means the home
+                                             folder, where there is no code to read, so an agent asked
+                                             about a build or a file answers from general knowledge. -->
+                                        <StackPanel Margin="0,10,0,0">
+                                            <TextBlock Text="PROJECT FOLDER"
+                                                       FontSize="10" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource Muted}"/>
+                                            <DockPanel Margin="0,4,0,0" LastChildFill="True">
+                                                <Button DockPanel.Dock="Right"
+                                                        Content="Browse"
+                                                        Padding="10,3"
+                                                        Margin="6,0,0,0"
+                                                        Click="OnBrowseAgentFolder"
+                                                        ToolTip="Pick the folder this agent works in"/>
+                                                <TextBox Text="{Binding WorkingDirectory, UpdateSourceTrigger=PropertyChanged}"
+                                                         local:Placeholder.Text="the folder this agent works in"/>
+                                            </DockPanel>
+                                        </StackPanel>
                                         <!-- Phrases that summon this agent. Several, because what a
                                              recogniser makes of one voice and one microphone is not
                                              always what was typed: record the phrase and store what

@@ -23,8 +23,14 @@ public sealed class WhisperCpp : ITranscriber
     private readonly string _binaryPath;
     private readonly string _modelPath;
     private readonly string _language;
+    private readonly bool _greedy;
 
-    public WhisperCpp(string? binaryPath = null, string? modelPath = null, string language = "en")
+    public WhisperCpp(
+        string? binaryPath = null,
+        string? modelPath = null,
+        string language = "en",
+        bool preferLargerModel = true,
+        bool greedy = false)
     {
         _binaryPath = Fallback(binaryPath, Environment.GetEnvironmentVariable("CPT_WHISPER_PATH"), "whisper-cli");
         _modelPath = Fallback(
@@ -33,9 +39,11 @@ public sealed class WhisperCpp : ITranscriber
             Path.Combine(AppContext.BaseDirectory, "models", "whisper", "ggml-base.en.bin"));
 
         // A better model sitting beside the configured one is always the right
-        // choice: size is the single biggest lever on what gets heard.
-        _modelPath = PreferBestInstalledModel(_modelPath);
+        // choice: size is the single biggest lever on what gets heard. The
+        // exception is wake spotting, which wants the opposite and pins its own.
+        if (preferLargerModel) _modelPath = PreferBestInstalledModel(_modelPath);
         _language = language;
+        _greedy = greedy;
     }
 
     /// <summary>True when both the binary and the model file are present.</summary>
@@ -54,7 +62,7 @@ public sealed class WhisperCpp : ITranscriber
 
         var result = await ProcessLauncher.RunAsync(
             _binaryPath,
-            BuildArguments(wavPath, _modelPath, _language),
+            BuildArguments(wavPath, _modelPath, _language, _greedy),
             new ProcessRunOptions { Timeout = TranscribeTimeout },
             cancellationToken).ConfigureAwait(false);
 
@@ -116,8 +124,52 @@ public sealed class WhisperCpp : ITranscriber
         return configuredPath;
     }
 
-    internal static IReadOnlyList<string> BuildArguments(string wavPath, string modelPath, string language) =>
-        ["-m", modelPath, "-f", wavPath, "-nt", "-l", language];
+    internal static IReadOnlyList<string> BuildArguments(
+        string wavPath, string modelPath, string language, bool greedy = false) =>
+        greedy
+            ? ["-m", modelPath, "-f", wavPath, "-nt", "-l", language, "-bs", "1", "-t", "8"]
+            : ["-m", modelPath, "-f", wavPath, "-nt", "-l", language];
+
+    /// <summary>
+    /// A second recogniser, deliberately the SMALLEST one installed, used only
+    /// to notice the wake phrase.
+    ///
+    /// Recognition cost here is almost entirely fixed -- whisper pads every clip
+    /// to thirty seconds, so a one-second phrase costs the same as a sentence.
+    /// Measured on this machine, same clip:
+    ///
+    ///     small.en   2614 ms
+    ///     base.en     864 ms
+    ///     tiny.en     468 ms
+    ///
+    /// That fixed cost was the whole of the delay between saying "hey computer"
+    /// and the app noticing: with small.en installed for accuracy, waking took
+    /// three seconds, which is long enough to assume it did not hear you.
+    ///
+    /// So the two jobs get different models. Spotting one short, known phrase is
+    /// what tiny.en is good at; understanding a dictated request is not, and
+    /// that still goes to the largest model installed.
+    /// </summary>
+    public static WhisperCpp? ForWakeSpotting(string? binaryPath, string? accurateModelPath)
+    {
+        var folder = Path.GetDirectoryName(
+            string.IsNullOrWhiteSpace(accurateModelPath)
+                ? new WhisperCpp(binaryPath).ModelPath
+                : accurateModelPath);
+
+        if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) return null;
+
+        foreach (var name in new[] { "ggml-tiny.en.bin", "ggml-base.en.bin" })
+        {
+            var candidate = Path.Combine(folder, name);
+            if (!File.Exists(candidate)) continue;
+
+            var spotter = new WhisperCpp(binaryPath, candidate, preferLargerModel: false, greedy: true);
+            return spotter.IsAvailable ? spotter : null;
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// Strips whisper's decorations: bracketed timestamps that survive -nt, and

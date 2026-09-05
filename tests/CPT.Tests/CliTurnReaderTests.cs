@@ -35,6 +35,44 @@ public class CliTurnReaderTests
     }
 
     [Fact]
+    public void Anthropic_reader_speaks_only_the_final_result_not_the_narration()
+    {
+        // The bug this guards: an agentic turn narrates every step, and each
+        // step arrived as its own assistant event. Concatenated, the persona
+        // read out the whole working session instead of the answer.
+        var events = Run(new AnthropicStreamJsonReader(),
+            """{"type":"assistant","message":{"content":[{"type":"text","text":"I'll check the build."}]}}""",
+            """{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"}]}}""",
+            """{"type":"assistant","message":{"content":[{"type":"text","text":"Now the test output."}]}}""",
+            """{"type":"result","subtype":"success","result":"The build failed in PhraseMatcher."}""");
+
+        Assert.Equal("The build failed in PhraseMatcher.", AssistantText(events));
+        Assert.DoesNotContain("check the build", AssistantText(events));
+    }
+
+    [Fact]
+    public void Anthropic_reader_falls_back_to_the_last_message_when_the_turn_is_cut_short()
+    {
+        // No result event: the process died or the schema moved. The closing
+        // message is the best answer available, and silence is the worst.
+        var events = Run(new AnthropicStreamJsonReader(),
+            """{"type":"assistant","message":{"content":[{"type":"text","text":"Looking into it."}]}}""",
+            """{"type":"assistant","message":{"content":[{"type":"text","text":"It was a null path."}]}}""");
+
+        Assert.Equal("It was a null path.", AssistantText(events));
+    }
+
+    [Fact]
+    public void Codex_reader_speaks_only_its_closing_message()
+    {
+        var events = Run(new CodexJsonLinesReader(),
+            """{"type":"item.completed","item":{"item_type":"agent_message","text":"Reading the file."}}""",
+            """{"type":"item.completed","item":{"item_type":"agent_message","text":"Patched it."}}""");
+
+        Assert.Equal("Patched it.", AssistantText(events));
+    }
+
+    [Fact]
     public void Anthropic_reader_ignores_tool_use_blocks()
     {
         var events = Run(new AnthropicStreamJsonReader(),

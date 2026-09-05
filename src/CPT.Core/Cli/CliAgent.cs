@@ -82,16 +82,20 @@ public sealed class CliAgent : IDisposable
         string prompt,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var arguments = BuildArguments(prompt);
+        var piped = MustPipePrompt(prompt);
+        var arguments = BuildArguments(prompt, piped);
         var reader = CliTurnReaderFactory.Create(_provider.Run.OutputFormat);
 
-        CptLog.Write($"[cli] {_provider.Id} turn ({prompt.Length} chars, resume={_hasPriorTurn})");
+        CptLog.Write(
+            $"[cli] {_provider.Id} turn ({prompt.Length} chars, resume={_hasPriorTurn}"
+            + (piped ? ", piped)" : ")"));
 
         ProcessRun? run = null;
         string? launchError = null;
         try
         {
-            run = ProcessRun.Start(_provider.Command, arguments, CreateRunOptions());
+            run = ProcessRun.Start(
+                _provider.Command, arguments, CreateRunOptions(piped ? prompt : null));
         }
         catch (ProcessLaunchException ex)
         {
@@ -156,8 +160,9 @@ public sealed class CliAgent : IDisposable
         }
     }
 
-    private ProcessRunOptions CreateRunOptions() => new()
+    private ProcessRunOptions CreateRunOptions(string? standardInput = null) => new()
     {
+        StandardInput = standardInput,
         // The turn's own timeout is enforced above, where a clean error can be
         // reported; the process-level one only exists as a backstop.
         Timeout = null,
@@ -170,7 +175,27 @@ public sealed class CliAgent : IDisposable
     /// always its own argv entry, so no quoting or escaping is required and its
     /// content can never be read as an option.
     /// </summary>
-    internal IReadOnlyList<string> BuildArguments(string prompt)
+    internal IReadOnlyList<string> BuildArguments(string prompt) => BuildArguments(prompt, false);
+
+    /// <summary>
+    /// True when this prompt cannot survive being an argument.
+    ///
+    /// On Windows every one of these CLIs is a batch shim -- claude.cmd,
+    /// codex.cmd, gemini.cmd -- so the command line runs through cmd.exe, and
+    /// cmd.exe ends an argument at the first newline. It does not fail: the
+    /// child starts, exits zero, and answers whatever the first line happened
+    /// to say. Every persona rewrite was losing all but its opening line this
+    /// way, and the CLI was dutifully replying to that fragment -- once with
+    /// "your message cut off at ...", which is what finally gave it away.
+    ///
+    /// A prompt containing a newline is therefore piped to stdin instead,
+    /// which these CLIs read when no prompt argument is present.
+    /// </summary>
+    private static bool MustPipePrompt(string prompt) =>
+        prompt.Contains('\n', StringComparison.Ordinal)
+        || prompt.Contains('\r', StringComparison.Ordinal);
+
+    private List<string> BuildArguments(string prompt, bool viaStandardInput)
     {
         var template = _hasPriorTurn && _provider.Run.ContinueArgs.Count > 0
             ? _provider.Run.ContinueArgs
@@ -182,15 +207,18 @@ public sealed class CliAgent : IDisposable
         foreach (var token in template)
         {
             if (token == OptionsPlaceholder) arguments.AddRange(effect.Arguments);
-            else if (token == PromptPlaceholder) arguments.Add(prompt);
+            else if (token == PromptPlaceholder) { if (!viaStandardInput) arguments.Add(prompt); }
             else arguments.Add(token.Replace(PromptPlaceholder, prompt, StringComparison.Ordinal));
         }
 
         // A template with no prompt placeholder would silently drop the user's
         // words. Appending is the sane repair, and keeps a hand-edited override
         // working rather than failing in a way nobody can diagnose by ear.
-        if (!template.Any(a => a.Contains(PromptPlaceholder, StringComparison.Ordinal)))
+        if (!viaStandardInput
+            && !template.Any(a => a.Contains(PromptPlaceholder, StringComparison.Ordinal)))
+        {
             arguments.Add(prompt);
+        }
 
         if (effect.Arguments.Count > 0
             && !template.Contains(OptionsPlaceholder, StringComparer.Ordinal))

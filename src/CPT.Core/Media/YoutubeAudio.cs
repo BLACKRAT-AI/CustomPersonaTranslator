@@ -128,6 +128,18 @@ public sealed partial class YoutubeAudio
         progress?.Report("Downloading audio…");
         var failure = await RunWithProgressAsync(arguments, progress, cancellationToken).ConfigureAwait(false);
 
+        // yt-dlp is a self-extracting bundle, and sometimes it simply fails to
+        // unpack itself -- "Failed to extract api-ms-win-core-errorhandling...:
+        // decompression resulted in return code -1". Nothing is wrong with the
+        // binary; the same file ran correctly a second later. Observed here as
+        // a video that would not load at all, reported as though the link were
+        // bad. It costs one retry to tell the difference.
+        if (failure is not null && LooksLikeToolDidNotStart(failure))
+        {
+            progress?.Report("yt-dlp did not start cleanly — trying once more…");
+            failure = await RunWithProgressAsync(arguments, progress, cancellationToken).ConfigureAwait(false);
+        }
+
         // YouTube changes how it serves media every few weeks, and an out-of-date
         // yt-dlp starts failing with 403s and format errors that look like a
         // problem with the video. Updating and retrying once turns the single
@@ -159,6 +171,29 @@ public sealed partial class YoutubeAudio
 
         progress?.Report("Audio ready.");
         return wav;
+    }
+
+    /// <summary>
+    /// True when yt-dlp never got as far as running.
+    ///
+    /// Distinct from a stale tool: updating would not help, because the tool
+    /// did not execute. Retrying does.
+    /// </summary>
+    internal static bool LooksLikeToolDidNotStart(string failure)
+    {
+        ReadOnlySpan<string> symptoms =
+        [
+            "failed to extract",
+            "decompression resulted in return code",
+            "pyi-",
+            "failed to load python",
+        ];
+
+        foreach (var symptom in symptoms)
+        {
+            if (failure.Contains(symptom, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
     }
 
     /// <summary>

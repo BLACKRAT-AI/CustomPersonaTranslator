@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Threading;
+using System.Threading.Tasks;
 using CPT.Core.Models;
 
 namespace CPT.Core.Llm;
@@ -19,4 +20,19 @@ public interface IPersonaRewriter
     /// yield one piece, which the pipeline handles either way.
     /// </summary>
     IAsyncEnumerable<string> StreamRewriteAsync(Persona persona, string text, CancellationToken ct = default);
+
+    /// <summary>
+    /// Restates a set of short lines, returning one rewrite per line in order,
+    /// or null if the answer did not come back in a usable shape.
+    ///
+    /// Separate from a normal rewrite because it is a different instruction, and
+    /// asking for it the usual way does not work: given a list, the model
+    /// restates it as prose -- correctly, and in the persona's voice, but run
+    /// together and renumbered, so there is no way to tell which rewrite belongs
+    /// to which line.
+    ///
+    /// Null rather than a partial set: half a persona is worse than none.
+    /// </summary>
+    Task<IReadOnlyList<string>?> RewriteLinesAsync(
+        Persona persona, IReadOnlyList<string> lines, CancellationToken ct = default);
 }

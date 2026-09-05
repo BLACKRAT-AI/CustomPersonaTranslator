@@ -12,14 +12,21 @@ namespace CPT.Core.Cli.Streaming;
 /// {"type":"result","subtype":"success","result":"..."}
 /// </code>
 ///
-/// The assistant events arrive as the turn is generated, so they are what we
-/// speak. The trailing result event repeats the same prose, and is used only as a
-/// fallback for the case where the schema changed and no assistant event matched.
+/// Only the RESULT is spoken.
+///
+/// An agentic turn narrates itself: "I'll check the build", "now let me look at
+/// the test output", "found it". Each of those arrives as its own assistant
+/// event, and treating them as the reply meant the persona read the entire
+/// working session aloud, for a minute, before ever reaching the answer. The
+/// result event is the finished answer, and it is the only thing worth saying.
+///
+/// The narration is still emitted, as notices, because it is exactly what a log
+/// needs when a turn goes wrong. It simply is not speech.
 /// </summary>
 public sealed class AnthropicStreamJsonReader : ICliTurnReader
 {
-    private string? _resultFallback;
-    private bool _sawAssistantText;
+    private string? _result;
+    private string? _lastAssistantMessage;
     private string? _error;
 
     public IEnumerable<CliTurnEvent> Read(ProcessLine line)
@@ -52,10 +59,14 @@ public sealed class AnthropicStreamJsonReader : ICliTurnReader
                         break;
                     }
 
-                    foreach (var text in AssistantTextBlocks(root))
+                    var said = string.Join("\n\n", AssistantTextBlocks(root));
+                    if (said.Length > 0)
                     {
-                        _sawAssistantText = true;
-                        yield return CliTurnEvent.Assistant(text);
+                        // Kept, because a turn that ends without a result event
+                        // still has to say something, and the last thing the
+                        // agent said is the best answer available.
+                        _lastAssistantMessage = said;
+                        yield return CliTurnEvent.Notice(said);
                     }
                     break;
 
@@ -67,7 +78,7 @@ public sealed class AnthropicStreamJsonReader : ICliTurnReader
                     else if (JsonLine.StringOrNull(root, "subtype") is { } subtype && subtype != "success")
                         _error = JsonLine.StringOrNull(root, "result") ?? subtype;
                     else
-                        _resultFallback = JsonLine.StringOrNull(root, "result");
+                        _result = JsonLine.StringOrNull(root, "result");
                     break;
 
                 case "system":
@@ -84,8 +95,10 @@ public sealed class AnthropicStreamJsonReader : ICliTurnReader
             yield return CliTurnEvent.Error(_error);
             yield break;
         }
-        if (!_sawAssistantText && _resultFallback is { Length: > 0 })
-            yield return CliTurnEvent.Assistant(_resultFallback);
+        // The result if there is one; otherwise the agent's closing message,
+        // which is what a crashed or truncated turn leaves behind.
+        var answer = _result is { Length: > 0 } ? _result : _lastAssistantMessage;
+        if (answer is { Length: > 0 }) yield return CliTurnEvent.Assistant(answer);
     }
 
     private static IEnumerable<string> AssistantTextBlocks(JsonElement root)

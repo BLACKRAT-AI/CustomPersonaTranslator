@@ -31,6 +31,11 @@ public static class PipelineDrive
     /// </summary>
     private sealed class PassThrough : IPersonaRewriter
     {
+        /// <summary>Hands the lines back unchanged, which is the point of a pass-through.</summary>
+        public Task<IReadOnlyList<string>?> RewriteLinesAsync(
+            Persona persona, IReadOnlyList<string> lines, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<string>?>(lines);
+
         public async IAsyncEnumerable<string> StreamRewriteAsync(
             Persona persona, string text, [EnumeratorCancellation] CancellationToken ct = default)
         {

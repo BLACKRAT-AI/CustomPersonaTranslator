@@ -39,6 +39,14 @@ Get-IfMissing "$voiceBase/en_US-amy-medium.onnx.json"  (Join-Path $piperModelsDi
 $whisperModel = Join-Path $whisperModelsDir "ggml-base.en.bin"
 Get-IfMissing "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin" $whisperModel
 
+# The wake phrase gets its own, much smaller model. Recognition cost is almost
+# entirely fixed -- whisper pads every clip to thirty seconds -- so noticing
+# "hey computer" costs the same as transcribing a sentence, and with a large
+# model installed for accuracy that was three seconds of apparently ignoring
+# the user. tiny.en answers in under half a second, which is all this job needs.
+$whisperWakeModel = Join-Path $whisperModelsDir "ggml-tiny.en.bin"
+Get-IfMissing "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin" $whisperWakeModel
+
 $whisperZip = Join-Path $whisperDir "whisper-bin.zip"
 $whisperExe = Join-Path $whisperDir "whisper-cli.exe"
 if (-not (Test-Path $whisperExe)) {

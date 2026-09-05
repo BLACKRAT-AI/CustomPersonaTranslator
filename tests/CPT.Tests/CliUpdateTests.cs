@@ -48,4 +48,21 @@ public class CliUpdateTests
     {
         Assert.False(CliInstaller.LooksOutOfDate("Everything is up to date."));
     }
+    [Theory]
+    // The real failure from the log: a turn died and the agent said nothing.
+    [InlineData("error 400: the gpt-6-astra model requires a newer version of Codex", "newer version")]
+    [InlineData("npm error EBUSY: resource busy or locked, copyfile", "could not be updated")]
+    [InlineData("There is not enough space on the disk.", "disk space")]
+    [InlineData("HTTP 429 rate limit exceeded", "rate limited")]
+    public void A_failure_is_explained_in_words_a_person_can_act_on(string failure, string expected)
+    {
+        Assert.Contains(expected, CliInstaller.Explain(failure), System.StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void A_turn_with_no_failure_still_says_something()
+    {
+        Assert.False(string.IsNullOrWhiteSpace(CliInstaller.Explain(null)));
+        Assert.False(string.IsNullOrWhiteSpace(CliInstaller.Explain("")));
+    }
 }

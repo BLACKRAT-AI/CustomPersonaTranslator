@@ -23,6 +23,7 @@ public sealed class CodexJsonLinesReader : ICliTurnReader
     private const string AgentMessageType = "agent_message";
 
     private bool _sawAssistantText;
+    private string? _lastAgentMessage;
     private string? _error;
 
     public IEnumerable<CliTurnEvent> Read(ProcessLine line)
@@ -62,7 +63,17 @@ public sealed class CodexJsonLinesReader : ICliTurnReader
     public IEnumerable<CliTurnEvent> Flush()
     {
         if (_error is { Length: > 0 } && !_sawAssistantText)
+        {
             yield return CliTurnEvent.Error(_error);
+            yield break;
+        }
+
+        // The LAST agent message, not all of them joined together. Codex
+        // narrates its way through a task -- one message per step -- and
+        // speaking the lot meant reading the whole working session aloud
+        // instead of the answer it arrived at.
+        if (_lastAgentMessage is { Length: > 0 })
+            yield return CliTurnEvent.Assistant(_lastAgentMessage);
     }
 
     private IEnumerable<CliTurnEvent> FromPayload(JsonElement payload)
@@ -77,7 +88,8 @@ public sealed class CodexJsonLinesReader : ICliTurnReader
         if (type.Contains(AgentMessageType, System.StringComparison.Ordinal))
         {
             _sawAssistantText = true;
-            yield return CliTurnEvent.Assistant(text);
+            _lastAgentMessage = text;
+            yield return CliTurnEvent.Notice(text);
         }
         else if (type.Contains("error", System.StringComparison.OrdinalIgnoreCase))
         {

@@ -173,9 +173,34 @@ public partial class PersonaWindow : Window
     /// </summary>
     private void ShowAgentBusy(bool busy)
     {
+        _agentBusy = busy;
+        CancelButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         SetRingLit(busy);
         if (!busy && !Pinned) PostToWeb(new { type = "transcript_clear" });
         else if (busy) PostToWeb(new { type = "thinking" });
+    }
+
+    /// <summary>True between sending a request and the agent finishing its turn.</summary>
+    private bool _agentBusy;
+
+    /// <summary>
+    /// Stops the agent, from inside the talk button.
+    ///
+    /// Handled on preview and marked handled so the press does not also start
+    /// hold-to-talk: the button it sits in is the microphone, and stopping a
+    /// task by accidentally recording one would be a poor trade.
+    /// </summary>
+    private void OnCancelAgent(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        CancelAgentNow();
+    }
+
+    /// <summary>Stops the agent, from the button or from Escape.</summary>
+    private void CancelAgentNow()
+    {
+        _services?.CancelAgent();
+        PostToWeb(new { type = "transcript_clear" });
     }
 
     private void ShowAndAppear()
@@ -192,9 +217,21 @@ public partial class PersonaWindow : Window
         if (Pinned) return;
 
         await Task.Delay(450).ConfigureAwait(true);
+        PostToWeb(new { type = "transcript_clear" });
+
+        // Finishing a SENTENCE is not finishing the TURN. The acknowledgement
+        // -- "working on it" -- ends this way too, and unlighting here left the
+        // ring dark for the whole minute the CLI was actually working, which is
+        // precisely when it should be turning. The ring belongs to the turn, so
+        // only the turn ending puts it out.
+        if (_agentBusy)
+        {
+            PostToWeb(new { type = "thinking" });
+            return;
+        }
+
         // The bar stays; its border and the hologram both fade.
         SetRingLit(false);
-        PostToWeb(new { type = "transcript_clear" });
     }
 
     private void PushActivePersona()
@@ -438,7 +475,14 @@ public partial class PersonaWindow : Window
             case Key.A: AvatarToggle.IsChecked = !AvatarVisible; e.Handled = true; break;
             case Key.P: Pinned = !Pinned; e.Handled = true; break;
             case Key.S: StandbyToggle.IsChecked = StandbyToggle.IsChecked != true; e.Handled = true; break;
-            case Key.Escape: Hide(); e.Handled = true; break;
+            // Escape stops the agent when it is working, and only hides the
+            // window when it is not. Hiding mid-task looked like a cancel and
+            // was not one -- the turn carried on, unseen.
+            case Key.Escape:
+                if (_agentBusy) CancelAgentNow();
+                else Hide();
+                e.Handled = true;
+                break;
         }
     }
 

@@ -387,7 +387,7 @@ public sealed partial class PersonaEditorView : SettingsPage
     /// </summary>
     private void OnPickVoiceFromVideo(object sender, RoutedEventArgs e)
     {
-        var picker = new VoiceClipperView(_services);
+        var picker = new VoiceClipperView(_services, _existing?.Id);
         picker.Finished += accepted =>
         {
             if (!accepted || picker.SamplePath is not { Length: > 0 } path) return;

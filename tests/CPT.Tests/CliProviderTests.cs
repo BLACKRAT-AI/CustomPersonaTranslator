@@ -150,11 +150,44 @@ public class CliAgentTests
             Assert.Contains(provider.Options, o => o.Id == "model");
             Assert.Contains(provider.Options, o => o.Id == "permissions");
 
-            // Every option must have a default that adds nothing, so a fresh
-            // install behaves exactly like running the CLI by hand.
+            // Every option's default must add nothing, so a fresh install
+            // behaves exactly like running the CLI by hand -- with one listed
+            // exception, so that deviating from the user's own configuration is
+            // always a deliberate, visible decision rather than a habit.
             foreach (var option in provider.Options)
+            {
+                if (DeliberateDefaults.Contains((provider.Id, option.Id))) continue;
                 Assert.Empty(option.Resolve(null).Args);
+            }
         }
+    }
+
+    /// <summary>
+    /// Defaults that intentionally differ from the CLI's own behaviour.
+    ///
+    /// Codex loads the MCP servers in the user's config on every invocation and
+    /// retries the ones it cannot reach. Measured on a machine with three
+    /// configured and two of them dead, against the same trivial prompt:
+    /// 58.7 s with them, 6.4 s without. A voice assistant cannot spend a minute
+    /// connecting to a Unity endpoint that is not running, so CPT starts with
+    /// them off and the user can turn them back on.
+    /// </summary>
+    private static readonly HashSet<(string Provider, string Option)> DeliberateDefaults =
+        [(CliProviderCatalog.CodexId, "extensions")];
+
+    [Fact]
+    public void The_only_default_that_overrides_the_users_config_is_the_declared_one()
+    {
+        var overriding = new List<(string, string)>();
+
+        foreach (var provider in CliProviderCatalog.All())
+        foreach (var option in provider.Options)
+        {
+            if (option.Resolve(null).Args.Count > 0) overriding.Add((provider.Id, option.Id));
+        }
+
+        Assert.Equal(DeliberateDefaults.OrderBy(x => x.Provider).ToList(),
+                     overriding.OrderBy(x => x.Item1).ToList());
     }
 
     [Fact]
@@ -179,5 +212,28 @@ public class CommandLineQuotingTests
     public void Arguments_are_quoted_the_way_CommandLineToArgvW_expects(string argument, string expected)
     {
         Assert.Equal(expected, PtySession.Quote(argument));
+    }
+
+    [Fact]
+    public void Codex_offers_the_astra_model()
+    {
+        // Verified against codex-cli 0.153.3 on this machine: the id is
+        // "gpt-6-astra", and it is what the user has in ~/.codex/config.toml.
+        var codex = CliProviderCatalog.All().Single(p => p.Id == CliProviderCatalog.CodexId);
+        var model = codex.Options.Single(o => o.Id == "model");
+        var astra = model.Choices.Single(c => c.Id == "gpt-6-astra");
+
+        Assert.Equal(["-m", "gpt-6-astra"], astra.Args);
+    }
+
+    [Fact]
+    public void Codex_offers_the_extra_high_reasoning_effort()
+    {
+        var codex = CliProviderCatalog.All().Single(p => p.Id == CliProviderCatalog.CodexId);
+        var effort = codex.Options.Single(o => o.Id == "effort");
+        var xhigh = effort.Choices.Single(c => c.Id == "xhigh");
+
+        // Codex takes reasoning effort as a config override, not a flag.
+        Assert.Equal(["-c", "model_reasoning_effort=\"xhigh\""], xhigh.Args);
     }
 }

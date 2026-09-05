@@ -53,4 +53,31 @@ public class AcknowledgementTests
     {
         Assert.Contains(AcknowledgementCache.LineFor(request), AcknowledgementCache.Lines);
     }
+
+    [Theory]
+    // The request that exposed this: it matched nothing, so a specific
+    // instruction was answered with "working on it" and the user could not
+    // tell whether it had understood a word of it.
+    [InlineData("open my onshape form tab", "Opening that now.")]
+    [InlineData("launch chrome", "Opening that now.")]
+    [InlineData("check my email", "Checking your messages.")]
+    [InlineData("what is on my calendar", "Checking the calendar.")]
+    [InlineData("deploy to production", "Starting the deployment.")]
+    [InlineData("install the npm package", "Installing that now.")]
+    [InlineData("delete that folder", "Removing that now.")]
+    [InlineData("why did the build fail", "Checking the build.")]
+    [InlineData("run the tests", "Running through the tests.")]
+    public void The_acknowledgement_reflects_what_was_asked(string request, string expected)
+    {
+        Assert.Equal(expected, AcknowledgementCache.LineFor(request));
+    }
+
+    [Fact]
+    public void Every_situation_has_a_line_that_can_be_synthesised()
+    {
+        // Under four words the voice clone mangles the line -- it comes back
+        // with the first sound missing, or as silence.
+        foreach (var line in AcknowledgementCache.Lines)
+            Assert.True(line.Split(' ').Length >= 3, line + " is too short to synthesise");
+    }
 }

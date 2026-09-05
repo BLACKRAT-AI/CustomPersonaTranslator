@@ -61,7 +61,34 @@ public sealed class TranslationPipeline : IDisposable
         _tts = canClone ? _cloneTts! : _piperTts;
     }
 
-    public async Task TranslateAsync(Persona persona, string sourceMarkdown, CancellationToken ct = default)
+    /// <summary>
+    /// Speaks an answer that is ALREADY in the persona's voice.
+    ///
+    /// Saves an entire CLI turn. Measured on this machine, for "what is two
+    /// plus two": the agent answered in 5.0 s and rephrasing it cost another
+    /// 3.8 s, because a second CLI invocation pays the same three-second
+    /// start-up as the first. Asking the agent to give its final answer in the
+    /// persona's voice costs nothing extra -- the same call came back in 3.5 s
+    /// saying "Four." -- so the rewrite turn exists only when something else
+    /// produced the text.
+    /// </summary>
+    /// <summary>
+    /// Drops whatever is still queued to be spoken, at once.
+    ///
+    /// Cancelling the turn is not enough on its own: audio already handed to the
+    /// device keeps playing, so the agent would carry on talking about a task
+    /// the user had just stopped.
+    /// </summary>
+    public void StopSpeaking() => _player?.StopAndFlush();
+
+    public Task SpeakAsync(Persona persona, string alreadyInVoice, CancellationToken ct = default) =>
+        TranslateAsync(persona, alreadyInVoice, rewrite: false, ct);
+
+    public Task TranslateAsync(Persona persona, string sourceMarkdown, CancellationToken ct = default) =>
+        TranslateAsync(persona, sourceMarkdown, rewrite: true, ct);
+
+    private async Task TranslateAsync(
+        Persona persona, string sourceMarkdown, bool rewrite, CancellationToken ct)
     {
         var spoken = ContentFilter.ToSpoken(sourceMarkdown, persona);
         if (string.IsNullOrWhiteSpace(spoken)) return;
@@ -93,7 +120,15 @@ public sealed class TranslationPipeline : IDisposable
             // a streamed sentence has been synthesised it is too late to tell.
             // Long output still streams: waiting on a whole essay before the
             // first word would be worse than the risk.
-            if (spoken.Length <= VerifyRewriteMaxChars)
+            if (!rewrite)
+            {
+                foreach (var sentence in SplitForSpeech(spoken))
+                {
+                    OnSpokenChunk?.Invoke(sentence);
+                    await SpeakAsync(sentence, persona, ct);
+                }
+            }
+            else if (spoken.Length <= VerifyRewriteMaxChars)
             {
                 var text = await RewriteAsync(persona, spoken, ct).ConfigureAwait(false);
                 if (!PersonaRewrite.KeepsSubstance(spoken, text))

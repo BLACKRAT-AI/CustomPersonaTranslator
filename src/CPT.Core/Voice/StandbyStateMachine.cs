@@ -118,6 +118,40 @@ public sealed class StandbyStateMachine
     /// </summary>
     private StandbyStep ConsumeWhileSleeping(string transcript)
     {
+        if (MatchWake(transcript) is not { } match) return Step(StandbyOutcome.Ignored);
+        var (bestPhrase, bestOwner, bestRemainder) = match;
+
+        State = StandbyState.Listening;
+        _captured.Clear();
+        _wokeBy = bestOwner;
+
+        CptLog.Write($"[standby] woke on \"{bestPhrase}\""
+            + (bestOwner is null ? "" : " for agent " + bestOwner));
+
+        // The wake phrase and the request usually arrive in one breath -- "hey
+        // computer, what changed in this file" -- so whatever followed it is
+        // already the beginning of the request.
+        return string.IsNullOrWhiteSpace(bestRemainder)
+            ? Step(StandbyOutcome.Woke)
+            : ApplyDictation(bestRemainder, StandbyOutcome.Woke);
+    }
+
+    /// <summary>
+    /// Whether a transcript addresses this machine, and what was said after.
+    ///
+    /// Separate from consuming it, because the fast recogniser looks for the
+    /// wake phrase in speech that is still being spoken, and must be able to ask
+    /// "was I called?" without changing anything if the answer turns out to be
+    /// yes but the rest of the sentence is better heard by the accurate model.
+    ///
+    /// The longest match wins, so an agent called with "hey computer" is not
+    /// swallowed by a general "hey" -- the more specific address is the one the
+    /// user meant.
+    /// </summary>
+    public (string Phrase, string? Owner, string Remainder)? MatchWake(string? transcript)
+    {
+        if (string.IsNullOrWhiteSpace(transcript)) return null;
+
         string? bestRemainder = null;
         string? bestPhrase = null;
         string? bestOwner = null;
@@ -142,21 +176,7 @@ public sealed class StandbyStateMachine
         foreach (var phrase in _settings.WakePhrases) Consider(phrase, null);
         foreach (var (phrase, owner) in ExtraWakePhrases) Consider(phrase, owner);
 
-        if (bestRemainder is null) return Step(StandbyOutcome.Ignored);
-
-        State = StandbyState.Listening;
-        _captured.Clear();
-        _wokeBy = bestOwner;
-
-        CptLog.Write($"[standby] woke on \"{bestPhrase}\""
-            + (bestOwner is null ? "" : " for agent " + bestOwner));
-
-        // The wake phrase and the request usually arrive in one breath -- "hey
-        // computer, what changed in this file" -- so whatever followed it is
-        // already the beginning of the request.
-        return string.IsNullOrWhiteSpace(bestRemainder)
-            ? Step(StandbyOutcome.Woke)
-            : ApplyDictation(bestRemainder, StandbyOutcome.Woke);
+        return bestPhrase is null ? null : (bestPhrase, bestOwner, bestRemainder ?? "");
     }
 
     private StandbyStep ConsumeWhileListening(string transcript)
