@@ -1,0 +1,147 @@
+using System;
+using System.Collections.Concurrent;
+using System.IO;
+using System.Net;
+using System.Net.WebSockets;
+using System.Text;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using CPT.Core.Models;
+using CPT.Core.Diagnostics;
+
+namespace CPT.Core.Ipc;
+
+// Tiny WebSocket server over HttpListener — no ASP.NET Core dependency.
+// Bound to 127.0.0.1 only. Connections tagged by ?adapter=<id>.
+public sealed class IpcServer : IDisposable
+{
+    private readonly HttpListener _listener = new();
+    private readonly ConcurrentDictionary<string, WebSocket> _clients = new();
+    private readonly CancellationTokenSource _cts = new();
+    private int _port;
+
+    public event Action<string /*adapter*/, InboundMessage>? MessageReceived;
+    public event Action<string /*adapter*/>? ClientConnected;
+    public event Action<string /*adapter*/>? ClientDisconnected;
+
+    public int Port => _port;
+
+    public IpcServer(int port = 17872)
+    {
+        _port = port;
+    }
+
+    /// <summary>
+    /// Binds the local adapter channel, walking ports if something already holds
+    /// one.
+    ///
+    /// Failing to bind is NOT fatal and never throws. The IPC channel only
+    /// serves editor adapters; the app's own microphone, agent and voice all
+    /// work without it. Throwing here took the entire application down whenever
+    /// a stale HTTP.SYS registration or a second copy held the port -- a whole
+    /// app lost to an optional feature.
+    /// </summary>
+    public void Start()
+    {
+        const int maxAttempts = 8;
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            try
+            {
+                if (_listener.IsListening) return;
+                _listener.Prefixes.Clear();
+                _listener.Prefixes.Add($"http://127.0.0.1:{_port}/");
+                _listener.Start();
+                _ = Task.Run(AcceptLoopAsync);
+                return;
+            }
+            catch (Exception ex) when (ex is HttpListenerException or ObjectDisposedException)
+            {
+                // A disposed listener can never be started again, so there is
+                // nothing to retry -- only a busy port is worth another port.
+                if (ex is ObjectDisposedException) break;
+                _port++;
+            }
+        }
+
+        CptLog.Write($"[ipc] could not bind a local port near {_port}; adapters are unavailable this session.");
+    }
+
+    private async Task AcceptLoopAsync()
+    {
+        while (!_cts.IsCancellationRequested)
+        {
+            HttpListenerContext ctx;
+            try { ctx = await _listener.GetContextAsync(); }
+            catch { return; }
+
+            if (!ctx.Request.IsWebSocketRequest)
+            {
+                ctx.Response.StatusCode = 426;
+                ctx.Response.Close();
+                continue;
+            }
+            _ = Task.Run(() => HandleClientAsync(ctx));
+        }
+    }
+
+    private async Task HandleClientAsync(HttpListenerContext ctx)
+    {
+        var adapter = ctx.Request.QueryString["adapter"] ?? Guid.NewGuid().ToString("N")[..8];
+        WebSocketContext wsCtx;
+        try { wsCtx = await ctx.AcceptWebSocketAsync(subProtocol: null); }
+        catch { ctx.Response.Close(); return; }
+        var ws = wsCtx.WebSocket;
+        _clients[adapter] = ws;
+        ClientConnected?.Invoke(adapter);
+
+        var buffer = new byte[16 * 1024];
+        var ms = new MemoryStream();
+        try
+        {
+            while (ws.State == WebSocketState.Open && !_cts.IsCancellationRequested)
+            {
+                ms.SetLength(0);
+                WebSocketReceiveResult result;
+                do
+                {
+                    result = await ws.ReceiveAsync(buffer, _cts.Token);
+                    if (result.MessageType == WebSocketMessageType.Close)
+                    {
+                        await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", _cts.Token);
+                        return;
+                    }
+                    ms.Write(buffer, 0, result.Count);
+                } while (!result.EndOfMessage);
+
+                var text = Encoding.UTF8.GetString(ms.ToArray());
+                InboundMessage? msg = null;
+                try { msg = JsonSerializer.Deserialize<InboundMessage>(text); }
+                catch { /* ignore malformed */ }
+                if (msg is not null) MessageReceived?.Invoke(adapter, msg);
+            }
+        }
+        catch { /* connection closed */ }
+        finally
+        {
+            _clients.TryRemove(adapter, out _);
+            ClientDisconnected?.Invoke(adapter);
+            try { ws.Dispose(); } catch { }
+        }
+    }
+
+    public async Task SendAsync(string adapter, object payload)
+    {
+        if (!_clients.TryGetValue(adapter, out var ws) || ws.State != WebSocketState.Open) return;
+        var json = JsonSerializer.SerializeToUtf8Bytes(payload);
+        await ws.SendAsync(json, WebSocketMessageType.Text, true, _cts.Token);
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        try { _listener.Stop(); } catch { }
+        foreach (var c in _clients.Values) try { c.Dispose(); } catch { }
+    }
+}

@@ -1,0 +1,68 @@
+using System.Collections.Generic;
+
+namespace CPT.Core.Models;
+
+public sealed class Persona
+{
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string Description { get; set; } = "";
+
+    // Style — used at rewrite time.
+    public string SystemPrompt { get; set; } = "";
+    public List<string> FewShotQuotes { get; set; } = new();
+    public Dictionary<string, string> StyleProfile { get; set; } = new();
+
+    // Voice — used at TTS time.
+    public VoiceConfig Voice { get; set; } = new();
+
+    // Visual — used by hologram window.
+    public VisualConfig Visual { get; set; } = new();
+
+    // IO providers this persona is bound to. (See IoProvider implementations.)
+    public List<string> IoProviders { get; set; } = new() { "local" };
+
+    // Content filtering.
+    public ContentFilterMode FilterMode { get; set; } = ContentFilterMode.ProseAndSummaries;
+    public bool AnnounceSkippedBlocks { get; set; } = true;
+
+    // Transcript panel toggle for hologram window (off by default).
+    public bool ShowTranscriptPanel { get; set; }
+}
+
+public sealed class VoiceConfig
+{
+    // "piper" or "chatterbox"
+    public string Engine { get; set; } = "piper";
+    // Piper: model file name (e.g., "en_US-amy-medium.onnx"); Chatterbox: cloned-voice id
+    public string VoiceRef { get; set; } = "en_US-amy-medium";
+    public float Speed { get; set; } = 1.0f;
+
+    /// <summary>
+    /// How much intonation a cloned voice adds, 0 to 1. Low follows the
+    /// reference clip's own delivery; a monotone reference stays monotone.
+    /// </summary>
+    public double Expressiveness { get; set; } = 0.3;
+    public string CloneModel { get; set; } = "original";
+    public float Pitch { get; set; } = 1.0f;
+    public string? VoiceSampleFile { get; set; }
+}
+
+public sealed class VisualConfig
+{
+    public string? ImageFile { get; set; }
+    public string HologramStyle { get; set; } = "particles";
+    public string? ModelFile { get; set; }
+    public string ModelFraming { get; set; } = "auto";
+    public double ModelHeadFraction { get; set; } = 0.25;
+    public double ModelRotation { get; set; }
+    public double ModelZoom { get; set; } = 1;
+
+    /// <summary>Persona colour, or "prismatic" for the full spectrum sweep.</summary>
+    public string HologramColor { get; set; } = "prismatic";
+    public float GlitchIntensity { get; set; } = 0.5f;
+    public string WaveformStyle { get; set; } = "bars";
+    public string IdleAnimation { get; set; } = "breathe";
+}
+
+public enum ContentFilterMode { StrictProse, ProseAndSummaries, SpeakEverything, Custom }

@@ -1,0 +1,895 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Media;
+using CPT.Shell.Controls;
+using CPT.Core.Models;
+using CPT.Core.Personas;
+using CPT.Core.Research;
+using CPT.Core.Tts;
+using Microsoft.Win32;
+using Microsoft.Web.WebView2.Core;
+using System.Text.Json;
+
+namespace CPT.Shell.Views;
+
+public sealed partial class PersonaEditorView : SettingsPage
+{
+    public override string PageTitle => _existing is null ? "New persona" : "Edit " + _existing.Name;
+
+    /// <summary>Blank line between paragraphs: how the sample box separates quotes.</summary>
+    private static readonly string[] ParagraphSeparators = ["\r\n\r\n", "\n\n"];
+
+    private readonly AppServices _services;
+    private readonly Persona? _existing;
+    private List<string> _researchQuotes = new();
+
+    private static string SanitizeId(string s)
+    {
+        var bad = System.IO.Path.GetInvalidFileNameChars();
+        var chars = s.Where(c => !bad.Contains(c) && c != ' ').ToArray();
+        return new string(chars).ToLowerInvariant();
+    }
+
+    public PersonaEditorView(AppServices services, Persona? existing = null)
+    {
+        InitializeComponent();
+        _services = services;
+        _existing = existing;
+        _services.OnAgentBusy += OnAgentBusyDuringReference;
+
+        VoiceCombo.ItemsSource = PiperVoiceCatalog.All;
+        VoiceCombo.SelectedIndex = 0;
+
+        RefreshCloneAvailabilityUi();
+        LoadHologramLook(existing);
+        OnExpressionChanged(this, new RoutedPropertyChangedEventArgs<double>(0, ExpressionSlider.Value));
+        if (existing != null) LoadExisting(existing);
+        else if (_services.CloningAvailable)
+        {
+            // New persona on a machine where cloning is set up: default to
+            // clone mode so YouTube-imported voice samples are actually used.
+            // Without this, the radio defaults to Piper and most users save
+            // a chatterbox-capable persona with Engine=piper by accident.
+            ModeClone.IsChecked = true;
+        }
+        ApplyModeUi();
+        RefreshVoiceSummary();
+    }
+
+    private void LoadExisting(Persona p)
+    {
+        HeaderText.Text = "EDIT PERSONA — " + p.Name;
+        CreateBtn.Content = "Save changes";
+        NameBox.Text = p.Name;
+        DescriptionBox.Text = p.Description;
+        TextSamplesBox.Text = string.Join("\n\n", p.FewShotQuotes);
+        VoiceFileBox.Text = p.Voice.VoiceSampleFile ?? "";
+        ExpressionSlider.Value = Math.Clamp(p.Voice.Expressiveness, 0, 1);
+        CloneModelCombo.SelectedIndex = p.Voice.CloneModel == "turbo" ? 1 : 0;
+        ImageFileBox.Text = p.Visual.ImageFile ?? "";
+        _modelFile = p.Visual.ModelFile;
+        HologramStyleCombo.SelectedIndex = Array.IndexOf(HologramStyles, p.Visual.HologramStyle);
+        ModelFramingCombo.SelectedIndex = p.Visual.ModelFraming == "upper" ? 1 : p.Visual.ModelFraming == "whole" ? 2 : 0;
+        ModelHeadSlider.Value = p.Visual.ModelHeadFraction;
+        ModelRotationSlider.Value = p.Visual.ModelRotation;
+        ModelZoomSlider.Value = p.Visual.ModelZoom;
+        RefreshModelLabel();
+
+        IoLocal.IsChecked         = p.IoProviders.Contains("local");
+        IoDiscordVoice.IsChecked  = p.IoProviders.Contains("discord-voice");
+        IoDiscordText.IsChecked   = p.IoProviders.Contains("discord-text");
+        TranscriptPanel.IsChecked = p.ShowTranscriptPanel;
+        var match = PiperVoiceCatalog.FindById(p.Voice.VoiceRef);
+        VoiceCombo.SelectedItem = match ?? PiperVoiceCatalog.All[0];
+
+        if (string.Equals(p.Voice.Engine, "chatterbox", StringComparison.OrdinalIgnoreCase) && _services.CloningAvailable)
+            ModeClone.IsChecked = true;
+        else
+            ModePreset.IsChecked = true;
+
+        // Editing an existing persona: expand advanced so the user sees what's there.
+        AdvancedExpander.IsExpanded = true;
+    }
+
+
+    /// <summary>
+    /// Shows the delivery setting in words, because a number from nought to one
+    /// says nothing about what it will sound like.
+    /// </summary>
+    private void OnExpressionChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (ExpressionValue is null) return;
+
+        ExpressionValue.Text = e.NewValue switch
+        {
+            <= 0.15 => "flat",
+            <= 0.35 => "restrained",
+            <= 0.6 => "lively",
+            _ => "theatrical",
+        };
+    }
+
+    private void OnModeChanged(object sender, RoutedEventArgs e) => ApplyModeUi();
+
+    // --- hologram look ----------------------------------------------------
+
+    /// <summary>One entry in the colour picker.</summary>
+    public sealed record HologramColorOption(string Name, string Value, Brush Swatch);
+
+    /// <summary>
+    /// The colours offered by name. Prismatic is first because it is the
+    /// default and the one the projection was designed around; Custom is last
+    /// and reveals the hex box rather than making everyone type a colour.
+    /// </summary>
+    private static readonly HologramColorOption[] ColorOptions =
+    [
+        new("Prismatic", "prismatic", PrismaticSwatch()),
+        new("Cyan", "#6FC2D6", Solid("#6FC2D6")),
+        new("Ice blue", "#7FA9FF", Solid("#7FA9FF")),
+        new("Violet", "#B388FF", Solid("#B388FF")),
+        new("Magenta", "#FF7AC6", Solid("#FF7AC6")),
+        new("Amber", "#E0A03C", Solid("#E0A03C")),
+        new("Green", "#63D68A", Solid("#63D68A")),
+        new("Red alert", "#E05C5C", Solid("#E05C5C")),
+        new("Custom…", "custom", Solid("#8A8A8A")),
+    ];
+
+    private static SolidColorBrush Solid(string hex)
+    {
+        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+        brush.Freeze();
+        return brush;
+    }
+
+    private static LinearGradientBrush PrismaticSwatch()
+    {
+        var brush = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+        foreach (var hex in new[] { "#FF5F6D", "#FFC371", "#63D68A", "#6FC2D6", "#B388FF" })
+            brush.GradientStops.Add(new GradientStop((Color)ColorConverter.ConvertFromString(hex),
+                brush.GradientStops.Count / 4.0));
+        brush.Freeze();
+        return brush;
+    }
+
+
+    // --- the colour wheel -------------------------------------------------
+
+    private bool _suppressColorSync;
+
+    /// <summary>
+    /// Keeps the wheel, the brightness slider, the hex box and the swatch
+    /// showing the same colour.
+    ///
+    /// One of them is always the one the user just touched, so each entry point
+    /// suppresses the others rather than letting them chase each other round.
+    /// </summary>
+    private void SyncColorFrom(Color colour, bool updateHex, bool updateWheel, bool updateSlider)
+    {
+        _suppressColorSync = true;
+        try
+        {
+            if (updateHex) ColorBox.Text = $"#{colour.R:X2}{colour.G:X2}{colour.B:X2}";
+            if (updateWheel) Wheel.SelectedColor = colour;
+            if (updateSlider) ColorLightness.Value = ColorWheel.ToHsl(colour).Lightness;
+            ColorSwatch.Background = new SolidColorBrush(colour);
+        }
+        finally
+        {
+            _suppressColorSync = false;
+        }
+        UpdateModelPreview();
+    }
+
+    private void OnColorHexChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    {
+        if (_suppressColorSync || Wheel is null) return;
+        if (TryParseColor(ColorBox.Text) is not { } colour) return;      // mid-typing is not an error
+
+        SyncColorFrom(colour, updateHex: false, updateWheel: true, updateSlider: true);
+    }
+
+    private void OnColorWheelPicked(Color colour) =>
+        SyncColorFrom(colour, updateHex: true, updateWheel: false, updateSlider: false);
+
+    private void OnColorLightnessChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_suppressColorSync || Wheel is null) return;
+
+        var (hue, saturation, _) = ColorWheel.ToHsl(Wheel.SelectedColor);
+        SyncColorFrom(ColorWheel.FromHsl(hue, saturation, e.NewValue),
+            updateHex: true, updateWheel: true, updateSlider: false);
+    }
+
+    /// <summary>A colour, or null while the user is still typing one.</summary>
+    private static Color? TryParseColor(string? text)
+    {
+        var value = text?.Trim();
+        if (string.IsNullOrEmpty(value)) return null;
+
+        try { return (Color)ColorConverter.ConvertFromString(value); }
+        catch (FormatException) { return null; }
+        catch (NotSupportedException) { return null; }
+    }
+    private void LoadHologramLook(Persona? persona)
+    {
+        ColorCombo.ItemsSource = ColorOptions;
+        Wheel.ColorPicked += OnColorWheelPicked;
+
+        var stored = persona?.Visual.HologramColor ?? "prismatic";
+        var match = Array.Find(ColorOptions,
+            o => string.Equals(o.Value, stored, StringComparison.OrdinalIgnoreCase));
+
+        // A colour that is not one of the named ones is still a valid colour --
+        // it just came from an older persona or a hand-edited file, so it opens
+        // on Custom with the hex already filled in rather than being lost.
+        ColorCombo.SelectedItem = match ?? ColorOptions[^1];
+        if (match is null) ColorBox.Text = stored;
+
+        // Whatever the hex box ended up holding is the colour the wheel shows.
+        if (TryParseColor(ColorBox.Text) is { } colour)
+            SyncColorFrom(colour, updateHex: false, updateWheel: true, updateSlider: true);
+
+
+    }
+
+    private void OnHologramColorChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (CustomColorRow is null) return;
+        CustomColorRow.Visibility = SelectedColorValue() == "custom" ? Visibility.Visible : Visibility.Collapsed;
+        UpdateModelPreview();
+    }
+
+    private string? SelectedColorValue() => (ColorCombo.SelectedItem as HologramColorOption)?.Value;
+
+    /// <summary>The colour to save: the named choice, or whatever Custom holds.</summary>
+    private string ChosenHologramColor()
+    {
+        var selected = SelectedColorValue();
+        if (selected is null) return "prismatic";
+        if (selected != "custom") return selected;
+        var custom = ColorBox.Text?.Trim();
+        return string.IsNullOrWhiteSpace(custom) ? "prismatic" : custom;
+    }
+
+
+    private void RefreshCloneAvailabilityUi()
+    {
+        var ready = _services.CloningAvailable;
+        ModeClone.IsEnabled = ready;
+        CloneAvailability.Text = ready
+            ? "Voice cloning ready."
+            : "Voice cloning needs a one-time setup (~3 GB).";
+        CloneAvailability.Foreground = ready
+            ? System.Windows.Media.Brushes.LightGreen
+            : System.Windows.Media.Brushes.Goldenrod;
+        SetupCloneBtn.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void OnSetupCloning(object sender, RoutedEventArgs e)
+    {
+        var page = new CloningSetupView();
+        page.Finished += _ =>
+        {
+            if (!page.SetupSucceeded) return;
+            _services.ReloadCloningEngine();
+            RefreshCloneAvailabilityUi();
+            RefreshVoiceSummary();
+        };
+        PushPage(page);
+    }
+
+    private void ApplyModeUi()
+    {
+        if (PresetPanel == null) return;
+        PresetPanel.IsEnabled = ModePreset?.IsChecked == true;
+        PresetPanel.Opacity = PresetPanel.IsEnabled ? 1.0 : 0.45;
+    }
+
+    private void OnAgentBusyDuringReference(bool busy)
+    {
+        if (busy) Dispatcher.BeginInvoke(StopReferencePreview);
+    }
+    private MediaPlayer? _referencePlayer;
+    private void StopReferencePreview()
+    {
+        if (_referencePlayer is not null) VoiceSampleHint.Text = "Reference playback stopped.";
+        _referencePlayer?.Close();
+        _referencePlayer = null;
+        if (PreviewReferenceBtn is not null) PreviewReferenceBtn.Content = "Listen to reference";
+    }
+
+    private void OnPreviewReference(object sender, RoutedEventArgs e)
+    {
+        if (_referencePlayer is not null) { StopReferencePreview(); return; }
+        if (_services.IsAgentBusy || _voicePreviewCancellation is not null)
+        { VoiceSampleHint.Text = "Stop the current speech before listening to the reference."; return; }
+        var path = VoiceFileBox.Text.Trim();
+        if (!File.Exists(path)) { VoiceSampleHint.Text = "Choose your voice clips first."; return; }
+        var player = new MediaPlayer { Volume = _services.SpeakingVolume };
+        _referencePlayer = player;
+        player.MediaEnded += (_, _) => {
+            if (!ReferenceEquals(_referencePlayer, player)) return;
+            StopReferencePreview();
+            VoiceSampleHint.Text = "Reference finished. Preview voice generates new speech from this audio.";
+        };
+        player.MediaFailed += (_, args) => {
+            if (!ReferenceEquals(_referencePlayer, player)) return;
+            StopReferencePreview(); VoiceSampleHint.Text = "Reference playback failed: " + args.ErrorException.Message;
+        };
+        try
+        {
+            player.Open(new Uri(Path.GetFullPath(path)));
+            player.Play();
+            PreviewReferenceBtn.Content = "Stop reference";
+            VoiceSampleHint.Text = "Playing the exact selected reference file. No generated speech.";
+        }
+        catch (Exception ex) { StopReferencePreview(); VoiceSampleHint.Text = "Reference playback failed: " + ex.Message; }
+    }
+
+    private CancellationTokenSource? _voicePreviewCancellation;
+    private async void OnPreviewSelectedVoice(object sender, RoutedEventArgs e)
+    {
+        if (_voicePreviewCancellation is not null) { _voicePreviewCancellation.Cancel(); return; }
+        StopReferencePreview();
+        if (_services.IsAgentBusy) { VoiceSampleHint.Text = "Stop the current narration before previewing a voice."; return; }
+        var sample = VoiceFileBox.Text.Trim();
+        if (ModeClone.IsChecked == true && !File.Exists(sample)) { VoiceSampleHint.Text = "Choose your voice clips first."; return; }
+        var preview = new Persona { Id = "voice-preview", Name = NameBox.Text,
+            Voice = new VoiceConfig { Engine = ModeClone.IsChecked == true ? "chatterbox" : "piper",
+                VoiceSampleFile = sample, VoiceRef = (VoiceCombo.SelectedItem as PiperVoice)?.Id ?? "en_US-amy-medium",
+                Expressiveness = ExpressionSlider.Value, CloneModel = ChosenCloneModel() } };
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        _voicePreviewCancellation = cancellation;
+        PreviewVoiceBtn.Content = "Stop preview";
+        VoiceSampleHint.Text = "Preparing your selected voice...";
+        try
+        {
+            await _services.Pipeline.SpeakAsync(preview, "Hello. This is a preview of the voice from your selected clips.", cancellation.Token);
+            VoiceSampleHint.Text = "Preview complete. Your selection has not been saved yet.";
+        }
+        catch (OperationCanceledException) { VoiceSampleHint.Text = "Voice preview stopped."; }
+        catch (Exception ex) { VoiceSampleHint.Text = "Voice preview failed: " + ex.Message; }
+        finally { _voicePreviewCancellation = null; PreviewVoiceBtn.Content = "Preview voice"; }
+    }
+
+    private async void OnAudition(object sender, RoutedEventArgs e)
+    {
+        if (VoiceCombo.SelectedItem is not PiperVoice v) return;
+        VoiceStatus.Text = $"Preparing {v.DisplayName}…";
+        IsEnabled = false;
+        try
+        {
+            await EnsureVoiceAsync(v.Id, msg => Dispatcher.Invoke(() => VoiceStatus.Text = msg));
+            VoiceStatus.Text = "Auditioning…";
+            var p = new Persona
+            {
+                Id = "audition", Name = v.DisplayName,
+                SystemPrompt = "Echo the user's text verbatim.",
+                Voice = new VoiceConfig { Engine = "piper", VoiceRef = v.Id },
+            };
+            await _services.Pipeline.TranslateAsync(p,
+                $"Hello. This is a sample of the {v.DisplayName} voice.");
+            VoiceStatus.Text = "Done.";
+        }
+        catch (Exception ex) { VoiceStatus.Text = "Audition failed: " + ex.Message; }
+        finally { IsEnabled = true; }
+    }
+
+    private async Task EnsureVoiceAsync(string id, Action<string> progress)
+    {
+        var dir = string.IsNullOrEmpty(_services.Settings.PiperModelsDir)
+            ? Path.Combine(AppContext.BaseDirectory, "models", "piper")
+            : _services.Settings.PiperModelsDir;
+        var dl = new PiperVoiceDownloader(dir);
+        if (!dl.IsInstalled(id))
+            await dl.EnsureAsync(id, new Progress<string>(progress));
+    }
+
+    private void OnPickVoice(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog { Filter = "Audio (*.wav;*.mp3;*.flac;*.ogg)|*.wav;*.mp3;*.flac;*.ogg" };
+        if (dlg.ShowDialog() == true) VoiceFileBox.Text = dlg.FileName;
+    }
+
+    private void OnClearVoice(object sender, RoutedEventArgs e) => VoiceFileBox.Clear();
+
+    private void OnVoiceFileChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    { StopReferencePreview(); RefreshVoiceSummary(); }
+
+    /// <summary>
+    /// Describes the chosen sample in plain terms — whether there is one, how
+    /// long it is, and whether cloning can actually use it yet.
+    /// </summary>
+    private void RefreshVoiceSummary()
+    {
+        if (VoiceSampleSummary is null) return;
+
+        var path = VoiceFileBox.Text.Trim();
+        var hasSample = path.Length > 0;
+
+        ClearVoiceBtn.Visibility = hasSample ? Visibility.Visible : Visibility.Collapsed;
+        LearnWordsFromSample.Visibility = hasSample && _services.Stt.IsAvailable
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+        if (path.Length == 0)
+        {
+            VoiceSampleSummary.Text = "No voice sample yet — a Piper preset will be used.";
+            VoiceSampleSummary.Foreground = System.Windows.Media.Brushes.Silver;
+            VoiceSampleHint.Text =
+                "Pick from video plays a YouTube clip and lets you mark only the parts in the voice you want — "
+                + "the marked parts become both the cloned voice and the words this persona learns from.";
+            return;
+        }
+
+        if (!File.Exists(path))
+        {
+            VoiceSampleSummary.Text = "That file is missing.";
+            VoiceSampleSummary.Foreground = System.Windows.Media.Brushes.Goldenrod;
+            VoiceSampleHint.Text = path;
+            return;
+        }
+
+        VoiceSampleSummary.Text = System.IO.Path.GetFileName(path) + DescribeLength(path);
+        VoiceSampleSummary.Foreground = System.Windows.Media.Brushes.LightGreen;
+        VoiceSampleHint.Text = _services.CloningAvailable
+            ? "Reference selected. Listen to it, then preview the generated voice to check the match."
+            : "Voice cloning still needs its one-time setup — see Advanced.";
+    }
+
+    /// <summary>Length of a 16 kHz mono WAV, or nothing when it cannot be told cheaply.</summary>
+    private static string DescribeLength(string path)
+    {
+        if (!path.EndsWith(".wav", StringComparison.OrdinalIgnoreCase)) return "";
+
+        try
+        {
+            using var reader = new NAudio.Wave.WaveFileReader(path);
+            var seconds = reader.TotalTime.TotalSeconds;
+            return seconds > 0.5 ? $"  ·  {seconds:0}s" : "";
+        }
+        catch (Exception ex) when (ex is IOException or FormatException or InvalidDataException)
+        {
+            return "";
+        }
+    }
+
+    /// <summary>
+    /// Opens the clip picker, which returns a sample cut from just the marked
+    /// stretches of a video — the usual case, since a video almost never
+    /// contains only the one voice.
+    /// </summary>
+    private void OnPickVoiceFromVideo(object sender, RoutedEventArgs e)
+    {
+        var picker = new VoiceClipperView(_services, _existing?.Id);
+        picker.Finished += accepted =>
+        {
+            if (!accepted || picker.SamplePath is not { Length: > 0 } path) return;
+
+            VoiceFileBox.Text = path;
+
+            // A sample picked this way is only useful in clone mode, so switch to it.
+            if (_services.CloningAvailable) ModeClone.IsChecked = true;
+            RefreshVoiceSummary();
+        };
+        PushPage(picker);
+    }
+
+    private string ChosenCloneModel() => CloneModelCombo.SelectedIndex == 1 ? "turbo" : "original";
+
+    private void OnCloneModelChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (ExpressionSlider is not null) ExpressionSlider.IsEnabled = ChosenCloneModel() != "turbo";
+    }
+
+    private static readonly string[] HologramStyles = ["particles", "scanlines", "steam", "lasers"];
+    private string ChosenHologramStyle() => HologramStyles[Math.Clamp(HologramStyleCombo.SelectedIndex, 0, 3)];
+    private void OnHologramStyleChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (HologramStyleHint is null) return;
+        HologramStyleHint.Text = ChosenHologramStyle() switch {
+            "scanlines" => "Translucent projection with horizontal bands, soft bloom and signal flicker.",
+            "steam" => "Soft vapor forms the face, with drifting wisps above it.",
+            "lasers" => "Fine laser filaments trace the face with travelling highlights.",
+            _ => "Flowing points assemble into a luminous face."
+        };
+        UpdateModelPreview();
+    }
+
+    private string? _modelFile;
+    private bool _previewReady;
+    private bool _previewInitializing;
+
+    private void RefreshModelLabel()
+    {
+        ModelFileLabel.Text = string.IsNullOrWhiteSpace(_modelFile) ? "Default hologram head" : Path.GetFileName(_modelFile);
+        ModelFileLabel.ToolTip = _modelFile;
+        ModelControls.Visibility = string.IsNullOrWhiteSpace(_modelFile) ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private async void OnPickModel(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog { Filter = "3D model (GLB)|*.glb", Title = "Choose the persona's 3D avatar" };
+        if (dialog.ShowDialog() != true) return;
+        _modelFile = dialog.FileName;
+        RefreshModelLabel();
+        await PreviewModelAsync();
+    }
+
+    private void OnClearModel(object sender, RoutedEventArgs e)
+    {
+        _modelFile = null;
+        RefreshModelLabel();
+        UpdateModelPreview();
+    }
+
+    private VisualConfig ModelVisual() => new() {
+        ModelFile = _modelFile,
+        HologramColor = ChosenHologramColor(), HologramStyle = ChosenHologramStyle(),
+        ModelFraming = ModelFramingCombo.SelectedIndex == 1 ? "upper" : ModelFramingCombo.SelectedIndex == 2 ? "whole" : "auto",
+        ModelHeadFraction = ModelHeadSlider.Value, ModelRotation = ModelRotationSlider.Value, ModelZoom = ModelZoomSlider.Value
+    };
+
+    private void SaveModel(VisualConfig visual)
+    {
+        var chosen = ModelVisual();
+        if (!string.IsNullOrWhiteSpace(chosen.ModelFile))
+        {
+            if (!File.Exists(chosen.ModelFile)) throw new FileNotFoundException("Choose an existing 3D model before saving.");
+            var folder = Path.Combine(_services.Personas.Dir, "models");
+            Directory.CreateDirectory(folder);
+            var source = Path.GetFullPath(chosen.ModelFile);
+            if (!source.StartsWith(Path.GetFullPath(folder) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                var destination = Path.Combine(folder, Guid.NewGuid().ToString("N") + ".glb");
+                File.Copy(source, destination);
+                chosen.ModelFile = destination;
+            }
+        }
+        visual.HologramStyle = chosen.HologramStyle;
+        visual.ModelFile = chosen.ModelFile;
+        visual.ModelFraming = chosen.ModelFraming;
+        visual.ModelHeadFraction = chosen.ModelHeadFraction;
+        visual.ModelRotation = chosen.ModelRotation;
+        visual.ModelZoom = chosen.ModelZoom;
+    }
+
+    private void OnModelFramingChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e) => UpdateModelPreview();
+    private void OnModelAdjustmentChanged(object sender, RoutedPropertyChangedEventArgs<double> e) => UpdateModelPreview();
+    private async void OnPreviewModel(object sender, RoutedEventArgs e) => await PreviewModelAsync();
+
+    private async Task PreviewModelAsync()
+    {
+        if (_previewInitializing) return;
+        ModelPreview.Visibility = Visibility.Visible;
+        if (_previewReady) { UpdateModelPreview(); return; }
+        _previewInitializing = true;
+        try
+        {
+            await ModelPreview.EnsureCoreWebView2Async(await WebViewEnvironment.GetAsync());
+            ModelPreview.DefaultBackgroundColor = System.Drawing.Color.FromArgb(255, 20, 22, 25);
+            ModelPreview.CoreWebView2.SetVirtualHostNameToFolderMapping("avatar-preview.cpt", Path.Combine(AppContext.BaseDirectory, "HologramWeb"), CoreWebView2HostResourceAccessKind.DenyCors);
+            ModelPreview.CoreWebView2.WebMessageReceived += (_, args) => {
+                try
+                {
+                    using var doc = JsonDocument.Parse(args.TryGetWebMessageAsString());
+                    var type = doc.RootElement.GetProperty("type").GetString();
+                    if (type == "ready") { _previewReady = true; UpdateModelPreview(); }
+                    else if (type == "avatar_status") ModelStatus.Text = doc.RootElement.GetProperty("text").GetString();
+                }
+                catch (JsonException) { }
+            };
+            ModelPreview.CoreWebView2.Navigate("https://avatar-preview.cpt/index.html");
+        }
+        catch (Exception ex) { ModelStatus.Text = "Preview unavailable: " + ex.Message; }
+        finally { _previewInitializing = false; }
+    }
+
+    private void UpdateModelPreview()
+    {
+        if (!_previewReady) return;
+        try
+        {
+            ModelStatus.Text = "Live preview";
+            ModelPreview.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(AvatarModelBinding.Message(ModelPreview.CoreWebView2, ModelVisual())));
+            ModelPreview.CoreWebView2.PostWebMessageAsJson("{\"type\":\"appear\"}");
+        }
+        catch (Exception ex) { ModelStatus.Text = ex.Message; }
+    }
+
+    public override void Teardown() { _services.OnAgentBusy -= OnAgentBusyDuringReference; StopReferencePreview(); _voicePreviewCancellation?.Cancel(); _previewReady = false; ModelPreview.Dispose(); base.Teardown(); }
+
+    private void OnPickImage(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog { Filter = "Images (*.png;*.jpg;*.jpeg)|*.png;*.jpg;*.jpeg" };
+        if (dlg.ShowDialog() == true) ImageFileBox.Text = dlg.FileName;
+    }
+
+    private async void OnResearch(object sender, RoutedEventArgs e)
+    {
+        var name = ResearchBox.Text?.Trim();
+        if (string.IsNullOrEmpty(name)) return;
+        ResearchStatus.Text = "Searching…";
+        try
+        {
+            var agent = new PersonaResearchAgent(_services.Rewriter);
+            var quotes = await agent.ResearchAsync(name, CancellationToken.None);
+            _researchQuotes = quotes;
+            ResearchStatus.Text = $"Found {quotes.Count} quotes for {name}.";
+        }
+        catch (Exception ex) { ResearchStatus.Text = "Research failed: " + ex.Message; }
+    }
+
+    // ----- Loading overlay helpers -----
+
+    private void ShowLoading(string title)
+    {
+        LoadingTitle.Text = title;
+        LoadingStep.Text = "";
+        LoadingLog.Text = "";
+        LoadingOverlay.Visibility = Visibility.Visible;
+    }
+    private void HideLoading() => LoadingOverlay.Visibility = Visibility.Collapsed;
+    private void Step(string text)
+    {
+        LoadingStep.Text = text;
+        if (LoadingLog.Text.Length > 0) LoadingLog.Text += "\n";
+        LoadingLog.Text += $"• {text}";
+        LoadingLogScroller.ScrollToEnd();
+    }
+
+    // ----- Main one-click create flow -----
+
+    private async void OnCreate(object sender, RoutedEventArgs e)
+    {
+        var name = (NameBox.Text ?? "").Trim();
+        if (string.IsNullOrEmpty(name)) { StatusText.Text = "Give the persona a name first."; return; }
+
+        var youtubeUrl = (YoutubeBox.Text ?? "").Trim();
+        var hasYoutube = youtubeUrl.Length > 0;
+        var extraSamples = (TextSamplesBox.Text ?? "")
+            .Split(ParagraphSeparators, StringSplitOptions.RemoveEmptyEntries)
+            .Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
+
+        if (!hasYoutube && extraSamples.Count == 0 && _researchQuotes.Count == 0
+            && string.IsNullOrEmpty(VoiceFileBox.Text) && _existing is null)
+        {
+            StatusText.Text = "Add a YouTube link, a voice sample, or some text samples under Advanced.";
+            return;
+        }
+
+        // Ordinary edits preserve the learned persona and its existing voice sample.
+        if (_existing is not null && !hasYoutube && _researchQuotes.Count == 0
+            && extraSamples.SequenceEqual(_existing.FewShotQuotes.Select(q => q.Trim()))
+            && string.Equals(VoiceFileBox.Text.Trim(), _existing.Voice.VoiceSampleFile ?? "", StringComparison.OrdinalIgnoreCase)
+            && (ModeClone.IsChecked == true) == _existing.Voice.Engine.Equals("chatterbox", StringComparison.OrdinalIgnoreCase)
+            && ((VoiceCombo.SelectedItem as PiperVoice)?.Id ?? "en_US-amy-medium") == _existing.Voice.VoiceRef)
+        {
+            try
+            {
+                _existing.Name = name;
+                _existing.Description = DescriptionBox.Text ?? "";
+                _existing.Visual.ImageFile = string.IsNullOrWhiteSpace(ImageFileBox.Text) ? null : ImageFileBox.Text;
+                _existing.Visual.HologramColor = ChosenHologramColor();
+                SaveModel(_existing.Visual);
+                _existing.Voice.Expressiveness = ExpressionSlider.Value;
+                _existing.Voice.CloneModel = ChosenCloneModel();
+                _existing.IoProviders = BuildIoProviders();
+                _existing.ShowTranscriptPanel = TranscriptPanel.IsChecked == true;
+                _services.Personas.Save(_existing);
+                _services.RefreshSavedPersona(_existing);
+                Finish(accepted: true);
+            }
+            catch (Exception ex) { StatusText.Text = "Could not save: " + ex.Message; }
+            return;
+        }
+
+        StatusText.Text = "";
+        ShowLoading(_existing is null ? "Creating persona…" : "Saving persona…");
+        IsEnabled = false;
+
+        try
+        {
+            var samples = new List<string>(extraSamples);
+            string? voiceSampleSource = string.IsNullOrWhiteSpace(VoiceFileBox.Text) ? null : VoiceFileBox.Text;
+
+            // 1. YouTube import.
+            if (hasYoutube)
+            {
+                Step("Downloading YouTube captions + audio (this can take a minute)…");
+                var importer = new YoutubeImporter(_services.Settings.YtDlpPath, _services.Settings.FfmpegPath);
+                var r = await importer.ImportAsync(youtubeUrl,
+                    fetchAudio: YtAudio.IsChecked == true,
+                    fetchCaptions: YtCaptions.IsChecked == true);
+
+                if (r.SampleQuotes.Count > 0)
+                {
+                    samples.AddRange(r.SampleQuotes);
+                    Step($"Captured {r.SampleQuotes.Count} caption chunks as writing samples.");
+                }
+                else if (!string.IsNullOrEmpty(r.CaptionsError))
+                {
+                    Step($"Captions unavailable: {r.CaptionsError}");
+                }
+                if (!string.IsNullOrEmpty(r.AudioFile))
+                {
+                    voiceSampleSource = r.AudioFile;
+                    Step($"Audio sample captured ({new FileInfo(r.AudioFile!).Length / 1024 / 1024} MB).");
+                }
+                else if (!string.IsNullOrEmpty(r.AudioError))
+                {
+                    Step($"Audio unavailable: {r.AudioError}");
+                }
+                if (!r.HasAnything && !string.IsNullOrEmpty(r.Error))
+                    throw new InvalidOperationException("YouTube import failed: " + r.Error);
+            }
+
+            // 2. Decide voice engine: clone if cloning is available AND we have a sample.
+            var useClone = _services.CloningAvailable
+                           && !string.IsNullOrEmpty(voiceSampleSource)
+                           && File.Exists(voiceSampleSource);
+            if (ModeClone.IsChecked == true && !useClone)
+            {
+                if (!_services.CloningAvailable)
+                    Step("Cloning not set up — falling back to Piper preset for this persona.");
+                else if (string.IsNullOrEmpty(voiceSampleSource))
+                    Step("No audio sample available — falling back to Piper preset.");
+            }
+            // Honor explicit preset choice over auto-clone.
+            if (ModePreset.IsChecked == true) useClone = false;
+
+            var voiceId = (VoiceCombo.SelectedItem as PiperVoice)?.Id ?? "en_US-amy-medium";
+            if (!useClone)
+            {
+                Step($"Ensuring Piper voice '{voiceId}' is installed…");
+                await EnsureVoiceAsync(voiceId, msg => Dispatcher.Invoke(() => Step(msg)));
+            }
+
+            // 3. Build the persona (LLM generates the system prompt from samples).
+            Step("Generating persona system prompt from samples…");
+            var req = new PersonaBuildRequest
+            {
+                Name = name,
+                Description = DescriptionBox.Text ?? "",
+                TextSamples = samples,
+                ResearchQuotes = _researchQuotes,
+                VoiceSampleFile = voiceSampleSource,
+                VoiceEngine = useClone ? "chatterbox" : "piper",
+                VoiceRef = voiceId,
+                ImageFile = string.IsNullOrWhiteSpace(ImageFileBox.Text) ? null : ImageFileBox.Text,
+                HologramColor = ChosenHologramColor(),
+                IoProviders = BuildIoProviders(),
+                ShowTranscriptPanel = TranscriptPanel.IsChecked == true,
+
+                // The sections the user marked in the clip picker are this
+                // speaker's own words, so they make the best writing samples
+                // this persona can have.
+                AutoTranscribe = LearnWordsFromSample.IsChecked == true,
+                WhisperPath = _services.Settings.WhisperPath,
+                WhisperModelPath = _services.Settings.WhisperModelPath,
+            };
+
+            var builder = new PersonaBuilder(_services.Rewriter);
+            var persona = await builder.BuildAsync(
+                req, new Progress<string>(message => Dispatcher.Invoke(() => Step(message))));
+
+            SaveModel(persona.Visual);
+
+            // Set Id BEFORE persisting the voice sample, otherwise the sample
+            // gets copied to `samples\.wav` (empty filename) and the persona
+            // is unusable for cloning.
+            if (_existing is not null) persona.Id = _existing.Id;
+            else if (string.IsNullOrEmpty(persona.Id)) persona.Id = SanitizeId(name);
+
+            // 4. Copy voice sample into the persistent samples dir.
+            if (!string.IsNullOrEmpty(voiceSampleSource) && File.Exists(voiceSampleSource))
+            {
+                Step("Saving voice sample to persona library…");
+                try
+                {
+                    var saved = _services.Personas.PersistVoiceSample(persona.Id, voiceSampleSource);
+                    persona.Voice.VoiceSampleFile = saved;
+                }
+                catch (Exception ex)
+                {
+                    Step($"WARN: could not persist sample ({ex.Message}); keeping original path.");
+                }
+            }
+
+            // Delivery is the user's choice, not the builder's.
+            persona.Voice.Expressiveness = ExpressionSlider.Value;
+            persona.Voice.CloneModel = ChosenCloneModel();
+
+            _services.Personas.Save(persona);
+            CPT.Core.Diagnostics.CptLog.Write(
+                $"Persona saved: id={persona.Id} name={persona.Name} Engine={persona.Voice.Engine} " +
+                $"VoiceSample={persona.Voice.VoiceSampleFile} (exists={File.Exists(persona.Voice.VoiceSampleFile ?? "")})");
+            _services.SetActivePersona(persona);
+            Step("Saved.");
+
+            // Pre-warm the clone subprocess so the confirmation isn't blocked
+            // on a 20s cold model load.
+            if (string.Equals(persona.Voice.Engine, "chatterbox", StringComparison.OrdinalIgnoreCase))
+            {
+                LoadingTitle.Text = "Preparing voice clone…";
+                var prog = new Progress<string>(s => Dispatcher.Invoke(() => Step(s)));
+                try { await WithTimeout(_services.WarmCloneAsync(persona, prog), WarmupBudget); }
+                catch (Exception ex)
+                {
+                    Step("Clone preload failed: " + ex.Message);
+                    Step("The selected clone must be available for the confirmation; no substitute voice will be used.");
+                }
+            }
+
+            // Speak an audible confirmation in the persona's voice + style so
+            // the user immediately knows save worked. LLM rewrites the seed
+            // ("<Name>, ready for action.") to match the persona's tone.
+            LoadingTitle.Text = $"Saying hello as {persona.Name}…";
+            Step("Routing confirmation through LLM rewrite + persona voice…");
+            try
+            {
+                await WithTimeout(_services.SpeakConfirmationAsync(persona), ConfirmationBudget);
+                Step("Done.");
+            }
+            catch (Exception ex)
+            {
+                Step("Confirmation playback failed: " + ex.Message);
+            }
+
+            await Task.Delay(300);
+
+            Finish(accepted: true);
+
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = "Could not save: " + ex.Message;
+        }
+        finally
+        {
+            // ALWAYS. The overlay used to come down only on the error path and
+            // on navigation, so a warm-up or confirmation that never returned
+            // left the spinner turning over a persona that had actually saved.
+            HideLoading();
+            IsEnabled = true;
+        }
+    }
+
+
+    /// <summary>How long the clone model gets to warm up before saving moves on.</summary>
+    private static readonly TimeSpan WarmupBudget = TimeSpan.FromMinutes(3);
+
+    /// <summary>How long the spoken confirmation gets. It is a nicety, not the save.</summary>
+    private static readonly TimeSpan ConfirmationBudget = TimeSpan.FromSeconds(45);
+
+    /// <summary>
+    /// Waits for a step, but never forever.
+    ///
+    /// Warming the clone model and speaking a confirmation both depend on
+    /// subprocesses that can hang. Neither is part of saving the persona, so
+    /// neither is allowed to hold the UI: the persona is already on disk by the
+    /// time these run.
+    /// </summary>
+    private static async Task WithTimeout(Task work, TimeSpan budget)
+    {
+        var finished = await Task.WhenAny(work, Task.Delay(budget)).ConfigureAwait(true);
+        if (finished != work) throw new TimeoutException($"Timed out after {budget.TotalSeconds:0}s.");
+        await work.ConfigureAwait(true);
+    }
+
+    private List<string> BuildIoProviders()
+    {
+        var io = new List<string>();
+        if (IoLocal.IsChecked == true) io.Add("local");
+        if (IoDiscordVoice.IsChecked == true) io.Add("discord-voice");
+        if (IoDiscordText.IsChecked == true) io.Add("discord-text");
+        return io;
+    }
+
+    private void OnCancel(object sender, RoutedEventArgs e) => Finish(accepted: false);
+}

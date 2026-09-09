@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CPT Hologram</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: transparent; overflow: hidden;
+    font-family: 'Segoe UI', system-ui, sans-serif; color: #eaeaea;
+  }
+  /* One canvas, fully transparent. The glowing border belongs to the bar below
+     this window, which WPF draws -- nothing here paints a panel of its own. */
+  #stage { position: relative; height: 100vh; }
+  #holo { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+  #toast {
+    position: absolute; left: 10px; right: 10px; bottom: 8px;
+    padding: 7px 10px; border-radius: 7px;
+    background: rgba(12,14,18,0.92); border: 1px solid #3a3a3a;
+    font-size: 11px; line-height: 1.35; color: #cfcfcf;
+    opacity: 0; transition: opacity 200ms ease;
+    pointer-events: none;
+  }
+  #toast.shown { opacity: 1; }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <canvas id="holo"></canvas>
+    <div id="toast"></div>
+  </div>
+
+<script type="importmap">{"imports":{"three":"./vendor/three.module.js"}}</script>
+<script type="module">
+import { Hologram } from './hologram.js';
+import { Prismatic } from './prismatic.js';
+
+const hologram = new Hologram(document.getElementById('holo'));
+const clock = new Prismatic();
+const toast = document.getElementById('toast');
+
+// One clock for the colour sweep, shared with the bar's border, so the head and
+// the border are never running off two different phases.
+hologram.ring = clock;
+clock.start();
+hologram.start();
+
+let toastTimer = 0;
+function showToast(text) {
+  toast.textContent = text;
+  toast.classList.add('shown');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove('shown'), 4200);
+}
+
+function setState(state) {
+  hologram.setState(state);
+  clock.setState(state === 'speaking' ? 'speaking' : state === 'thinking' ? 'busy' : 'idle');
+}
+
+function apply(message) {
+  switch (message.type) {
+    case 'persona':
+      // "prismatic" (or nothing) gives the full spectrum; a persona's own colour
+      // is swept around itself so the projection still reads as moving.
+      if (message.style) hologram.style = message.style;
+      if (Object.hasOwn(message, "model")) hologram.setModel(message.model, message.framing);
+      hologram.setPalette(message.color);
+      clock.setPalette(message.color);
+      break;
+
+    case 'appear':
+      hologram.talking = true;
+      setState('speaking');
+      break;
+
+    // The amplitude of the audio being heard right now, sixty times a second.
+    // This is the lip-sync: it drives the jaw directly.
+    case 'level':
+      hologram.setMouth(Number(message.level) || 0);
+      break;
+
+    // A chunk of the reply arriving is a word boundary. It only moves the mouth
+    // when no real audio level is arriving -- see mouthHit.
+    case 'transcript_chunk':
+      hologram.mouthHit(0.5);
+      break;
+
+    case 'sending':
+    case 'transcript_clear':
+      hologram.talking = false;
+      setState('idle');
+      break;
+
+    case 'thinking':
+      setState('thinking');
+      break;
+
+    case 'toast':
+      showToast(String(message.text || ''));
+      break;
+  }
+}
+
+window.addEventListener('avatar-status', event => {
+  window.chrome.webview.postMessage(JSON.stringify({type: 'avatar_status', text: event.detail.text, error: event.detail.error}));
+});
+window.chrome.webview.addEventListener('message' , (event) => {
+  // PostWebMessageAsJson delivers an already-parsed object; accept a string too
+  // so a command is never silently dropped over how the host sent it.
+  let message = event.data;
+  if (typeof message === 'string') {
+    try { message = JSON.parse(message); } catch { return; }
+  }
+  if (message && message.type) apply(message);
+});
+
+// The head is sized from the canvas, so a resized panel is a resized head.
+window.addEventListener('resize', () => hologram.relayout());
+
+window.chrome.webview.postMessage(JSON.stringify({ type: 'ready' }));
+</script>
+</body>
+</html>

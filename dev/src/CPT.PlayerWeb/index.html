@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CPT video</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0d0d0d; overflow: hidden; }
+  #player, iframe { width: 100%; height: 100%; border: 0; display: block; }
+  #message {
+    display: none;
+    position: absolute; inset: 0;
+    align-items: center; justify-content: center;
+    padding: 24px; box-sizing: border-box;
+    color: #cfcfcf; background: #0d0d0d;
+    font: 13px "Segoe UI", system-ui, sans-serif; text-align: center;
+  }
+</style>
+</head>
+<body>
+  <div id="player"></div>
+  <div id="message"></div>
+
+<script>
+/*
+ * The video pane of the voice-clip picker.
+ *
+ * This page exists so the host can read the playhead. WebView2 cannot see into
+ * a cross-origin YouTube iframe, but the IFrame API talks to it for us, so the
+ * page polls the player and forwards the time to the host — which is what the
+ * timeline and the mark buttons are driven from.
+ */
+'use strict';
+
+var player = null;
+var ready = false;
+var reportedDuration = 0;
+
+function post(payload) {
+  if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage(JSON.stringify(payload));
+}
+
+function showMessage(text) {
+  var box = document.getElementById('message');
+  box.textContent = text;
+  box.style.display = 'flex';
+}
+
+// The API script calls this by name once it has loaded.
+window.onYouTubeIframeAPIReady = function () {
+  post({ type: 'api_ready' });
+};
+
+function load(videoId) {
+  if (!window.YT || !window.YT.Player) {
+    showMessage('The YouTube player could not load. Check your internet connection.');
+    post({ type: 'error', message: 'player API unavailable' });
+    return;
+  }
+
+  document.getElementById('message').style.display = 'none';
+  if (player) { player.destroy(); player = null; ready = false; }
+
+  player = new YT.Player('player', {
+    videoId: videoId,
+    playerVars: { rel: 0, modestbranding: 1, playsinline: 1 },
+    events: {
+      onReady: function () {
+        ready = true;
+        post({ type: 'ready' });
+        reportDuration();
+      },
+      onStateChange: function (e) {
+        // 1 = playing, 2 = paused, 0 = ended.
+        post({ type: 'state', playing: e.data === 1 });
+        reportDuration();
+      },
+      onError: function () {
+        showMessage('This video cannot be played here. Its owner may have disabled embedding — ' +
+                    'the audio can still be downloaded and clipped.');
+        post({ type: 'error', message: 'embedding blocked' });
+      }
+    }
+  });
+}
+
+function reportDuration() {
+  if (!ready || !player.getDuration) return;
+  var duration = player.getDuration();
+  if (duration > 0 && Math.abs(duration - reportedDuration) > 0.5) {
+    reportedDuration = duration;
+    post({ type: 'duration', seconds: duration });
+  }
+}
+
+// Ten updates a second keeps the playhead smooth without flooding the host.
+setInterval(function () {
+  if (ready && player.getCurrentTime) post({ type: 'time', seconds: player.getCurrentTime() });
+}, 100);
+
+window.chrome.webview.addEventListener('message', function (event) {
+  // PostWebMessageAsJson delivers an already-parsed object, while
+  // PostWebMessageAsString delivers text. Accept either, so a command is never
+  // silently dropped because of how the host happened to send it.
+  var command = event.data;
+  if (typeof command === 'string') {
+    try { command = JSON.parse(command); } catch (err) { return; }
+  }
+  if (!command || !command.type) return;
+
+  switch (command.type) {
+    case 'load': load(command.videoId); break;
+    case 'seek': if (ready) player.seekTo(command.seconds, true); break;
+    case 'play': if (ready) player.playVideo(); break;
+    case 'pause': if (ready) player.pauseVideo(); break;
+    case 'rate': if (ready && player.setPlaybackRate) player.setPlaybackRate(command.value); break;
+  }
+});
+
+post({ type: 'page_ready' });
+</script>
+<script src="https://www.youtube.com/iframe_api"></script>
+</body>
+</html>

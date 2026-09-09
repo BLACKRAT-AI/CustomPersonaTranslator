@@ -1,0 +1,34 @@
+import { frameHead } from '../src/CPT.HologramWeb/head_framing.js';
+import assert from 'node:assert/strict';
+const points = [];
+for (let y = 0; y < 100; y++) for (let x = 0; x < 20; x++) points.push([x / 20 - 0.5, y / 10, (x % 4) / 4, y >= 80]);
+const auto = frameHead(points);
+assert.match(auto.status, /detected/);
+assert.ok(auto.targets.length >= 100);
+assert.ok(auto.targets.every(p => p.length === 5 && p.every(Number.isFinite)));
+const unnamed = points.map(p => [...p.slice(0, 3), false]);
+assert.match(frameHead(unnamed).status, /Upper model/);
+const whole = frameHead(points, {mode: 'whole'});
+assert.match(whole.status, /Whole model/);
+const enlarged = frameHead(points, {zoom: 2});
+assert.equal(enlarged.targets[0][0], auto.targets[0][0] * 2);
+assert.throws(() => frameHead([]), /no usable/);
+console.log('PASS named head, upper-body fallback, whole model, zoom and invalid geometry');
+
+const { laserEdges, scanRows } = await import('../src/CPT.HologramWeb/hologram_styles.js');
+const targets = auto.targets;
+const edges = laserEdges(targets);
+assert.ok(edges.length > 0);
+for (const [a, b] of edges) assert.ok(Math.hypot(...targets[a].slice(0, 3).map((n, i) => n - targets[b][i])) < 0.12);
+const rows = scanRows([{x: 9, y: 2, z: 0}, {x: 3, y: 1, z: 0}, {x: 1, y: 2, z: 0}]);
+assert.ok(rows.every(([_, points]) => points.every((p, i) => i === 0 || points[i - 1].x <= p.x)));
+console.log('PASS laser surface adjacency and ordered scan contours');
+
+const { surfaceTriangles } = await import('../src/CPT.HologramWeb/hologram_styles.js');
+const square = [[0,0],[1,0],[0,1],[1,1]];
+const mesh = surfaceTriangles(square);
+assert.equal(mesh.length, 2);
+assert.strictEqual(surfaceTriangles(square), mesh);
+assert.deepEqual(surfaceTriangles([[0,0],[1,0],[2,0]]), []);
+assert.ok(mesh.every(t => new Set(t).size === 3 && t.every(i => i >= 0 && i < square.length)));
+console.log('PASS continuous scanline surface, cache and degenerate geometry');

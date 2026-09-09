@@ -10,13 +10,21 @@ npm-debug.log*
 .env
 
 # Tools/downloads
-tools/
+# Downloaded runtimes and weights stay local; helper source is versioned.
+/dev/tools/*
+!/dev/tools/voiceclone/
+/dev/tools/voiceclone/*
+!/dev/tools/voiceclone/*.py
+/dev/app/tools/*
+!/dev/app/tools/voiceclone/
+/dev/app/tools/voiceclone/*
+!/dev/app/tools/voiceclone/*.py
 *.onnx
 *.bin
 
 # Installer build artifacts
-installer/build/
-installer/dist/
+/dev/installer/build/
+/dev/installer/dist/
 
 # OS
 Thumbs.db
@@ -25,3 +33,10 @@ Thumbs.db
 # IDE
 .idea/
 *.swp
+
+*.safetensors
+*.pt
+*.gguf
+*.log
+.env.*
+!.env.example

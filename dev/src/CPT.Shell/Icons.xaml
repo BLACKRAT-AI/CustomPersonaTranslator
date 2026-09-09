@@ -1,0 +1,59 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!--
+        Vector icon geometries, all drawn on the same 24x24 grid and stroked
+        rather than filled.
+
+        These replace the Unicode glyphs the toolbar used to use. Characters like
+        the pin and avatar glyphs are not present in the default Windows UI font,
+        so they fell back to whatever font did have them, or to a bare dot; the
+        toolbar buttons appeared as unlabelled dots as a result. Geometry has no
+        font to fall back from, so an icon looks the same on every machine.
+    -->
+
+    <Geometry x:Key="IconMenu">M4,7 H20 M4,12 H20 M4,17 H20</Geometry>
+
+    <Geometry x:Key="IconClose">M6.5,6.5 L17.5,17.5 M17.5,6.5 L6.5,17.5</Geometry>
+
+    <!-- Thumbtack, seen from the side. Filled variant is used when pinned. -->
+    <Geometry x:Key="IconPin">M9,3.5 H15 V9 L17.5,13 H6.5 L9,9 Z M12,13 V20.5</Geometry>
+
+    <!-- Head and shoulders. -->
+    <Geometry x:Key="IconAvatar">M12,4 A3.6,3.6 0 1,1 11.99,4 Z M4.5,20.5 C4.5,16.4 7.9,13.8 12,13.8 C16.1,13.8 19.5,16.4 19.5,20.5</Geometry>
+
+    <!-- Head and shoulders with a strike-through, for "avatar hidden". -->
+    <Geometry x:Key="IconAvatarOff">M12,4 A3.6,3.6 0 1,1 11.99,4 Z M4.5,20.5 C4.5,16.4 7.9,13.8 12,13.8 C16.1,13.8 19.5,16.4 19.5,20.5 M4,4 L20,20</Geometry>
+
+    <!-- Capsule microphone on a stand. -->
+    <Geometry x:Key="IconMic">M12,3.5 A2.8,2.8 0 0,1 14.8,6.3 V11.2 A2.8,2.8 0 0,1 9.2,11.2 V6.3 A2.8,2.8 0 0,1 12,3.5 Z M5.5,11 A6.5,6.5 0 0,0 18.5,11 M12,17.5 V20.5 M8.5,20.5 H15.5</Geometry>
+
+    <!-- Waveform, for standby / always-listening. -->
+    <Geometry x:Key="IconWaveform">M3,12 H5.5 L8,6.5 L11,17.5 L14,9.5 L16,14 L18.5,12 H21</Geometry>
+
+    <!-- Speaker cone with two arcs. The arcs are what makes it read as volume
+         rather than as a generic block at 15px. -->
+    <Geometry x:Key="IconVolume">M4,9.5 H7.5 L12,5.5 V18.5 L7.5,14.5 H4 Z M15,9 A4.5,4.5 0 0,1 15,15 M17.5,6.5 A8,8 0 0,1 17.5,17.5</Geometry>
+
+    <!-- Sliders, for settings. -->
+    <Geometry x:Key="IconSettings">M3,7.5 H8.2 M11.8,7.5 H21 M8.2,7.5 A1.8,1.8 0 1,0 11.8,7.5 A1.8,1.8 0 1,0 8.2,7.5 Z M3,16.5 H12.2 M15.8,16.5 H21 M12.2,16.5 A1.8,1.8 0 1,0 15.8,16.5 A1.8,1.8 0 1,0 12.2,16.5 Z</Geometry>
+
+    <!-- Chain link, for a connected CLI. -->
+    <Geometry x:Key="IconLink">M10,14 L14,10 M9.2,11.2 L7,13.4 A3.1,3.1 0 0,0 11.4,17.8 L13.6,15.6 M14.8,12.8 L17,10.6 A3.1,3.1 0 0,0 12.6,6.2 L10.4,8.4</Geometry>
+
+    <!-- Terminal window, for the sign-in pane. -->
+    <Geometry x:Key="IconTerminal">M3.5,5 H20.5 V19 H3.5 Z M7.5,10 L10.5,12.5 L7.5,15 M13,15.5 H17</Geometry>
+
+    <!-- Arrow into a tray, for install. -->
+    <Geometry x:Key="IconInstall">M12,4 V14.5 M8,10.8 L12,14.8 L16,10.8 M5,19 H19</Geometry>
+
+    <Geometry x:Key="IconCheck">M5,12.5 L10,17.5 L19,6.5</Geometry>
+
+    <!-- Left arrow, for stepping back out of a pane. -->
+    <Geometry x:Key="IconBack">M19,12 H5.5 M11,5.5 L4.5,12 L11,18.5</Geometry>
+
+    <Geometry x:Key="IconRefresh">M19.5,12 A7.5,7.5 0 1,1 17,6.4 M17.4,3 V7 H13.4</Geometry>
+
+    <Geometry x:Key="IconWarning">M12,4 L21,19.5 H3 Z M12,10 V14.5 M12,16.8 V17.2</Geometry>
+
+</ResourceDictionary>

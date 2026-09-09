@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Markdig" Version="1.2.0" />
+    <PackageReference Include="NAudio" Version="2.3.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The unit tests exercise a few internal helpers directly: argument
+         building, command-line quoting and transcript clean-up. Making them
+         public purely to test them would widen the API for no caller. -->
+    <InternalsVisibleTo Include="CPT.Tests" />
+    <InternalsVisibleTo Include="CPT.Smoke" />
+  </ItemGroup>
+
+</Project>

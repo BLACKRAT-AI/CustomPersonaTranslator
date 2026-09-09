@@ -11,3 +11,8 @@
 *.gguf binary
 *.zip binary
 *.cptpersona binary
+
+*.exe binary
+# Keep upstream vendor formatting unchanged.
+dev/src/CPT.HologramWeb/vendor/** -whitespace
+dev/app/HologramWeb/vendor/** -whitespace

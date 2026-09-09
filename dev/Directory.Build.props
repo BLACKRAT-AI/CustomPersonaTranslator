@@ -1,0 +1,27 @@
+<Project>
+
+  <!-- Solution-wide build settings. Kept here (rather than duplicated in every
+       .csproj) so that a single edit governs the whole repository. -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- The repo builds warning-clean. Keep it that way: a new warning is a
+         defect that has not been noticed yet. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+
+    <!-- Deterministic, debuggable release output. -->
+    <Deterministic>true</Deterministic>
+    <DebugType>portable</DebugType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+    <Company>CustomPersonaTranslator</Company>
+    <Product>CustomPersonaTranslator</Product>
+    <Copyright>© 2026</Copyright>
+    <VersionPrefix>0.4.21</VersionPrefix>
+  </PropertyGroup>
+
+</Project>
